@@ -98,6 +98,11 @@ static long madvise_behavior(struct vm_area_struct *vma,
 		if (error)
 			goto out;
 		break;
+	case MADV_VAS_PRIVATE:
+		new_flags |= VM_VAS_PRIVATE;
+		break;
+	case MADV_VAS_SHARED:
+		new_flags &= ~(VM_VAS_PRIVATE);
 	}
 
 	if (new_flags == vma->vm_flags) {
@@ -611,6 +616,10 @@ madvise_behavior_valid(int behavior)
 #endif
 	case MADV_DONTDUMP:
 	case MADV_DODUMP:
+#ifdef CONFIG_VAS
+	case MADV_VAS_PRIVATE:
+	case MADV_VAS_SHARED:
+#endif
 		return true;
 
 	default:
@@ -662,6 +671,9 @@ madvise_behavior_valid(int behavior)
  *  MADV_DONTDUMP - the application wants to prevent pages in the given range
  *		from being included in its core dump.
  *  MADV_DODUMP - cancel MADV_DONTDUMP: no longer exclude from core dump.
+ *  MADV_VAS_PRIVATE - mark the vmas as not shared between multiple VAS.
+ *  MADV_VAS_SHARED - cancel MADV_VAS_PRIVATE: vmas are shared between all VAS
+ *		of the task.
  *
  * return values:
  *  zero    - success

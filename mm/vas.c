@@ -107,8 +107,6 @@ static void __dump_memory_map(const char *title, struct mm_struct *mm)
 	int count;
 	struct vm_area_struct *vma;
 
-	down_read(&mm->mmap_sem);
-
 	/* Dump some general information. */
 	pr_info("-- %s [%p] --\n"
 		"> General information <\n"
@@ -148,11 +146,12 @@ static void __dump_memory_map(const char *title, struct mm_struct *mm)
 		else
 			pr_cont(" OTHER ");
 
-		pr_cont("%c%c%c%c [%c:%c]",
+		pr_cont("%c%c%c%c [%c:%c:%c]",
 			vma->vm_flags & VM_READ ? 'r' : '-',
 			vma->vm_flags & VM_WRITE ? 'w' : '-',
 			vma->vm_flags & VM_EXEC ? 'x' : '-',
 			vma->vm_flags & VM_MAYSHARE ? 's' : 'p',
+			vma->vm_flags & VM_VAS_PRIVATE ? 'p' : 's',
 			vma->vas_reference ? 'v' : '-',
 			vma->vas_attached ? 'a' : '-');
 
@@ -181,8 +180,6 @@ static void __dump_memory_map(const char *title, struct mm_struct *mm)
 	}
 	if (count == 0)
 		pr_cont("  EMPTY\n");
-
-	up_read(&mm->mmap_sem);
 }
 
 #define pr_vas_debug(fmt, args...) pr_info("[VAS] %s - " fmt, __func__, ##args)
@@ -1406,11 +1403,11 @@ static int vas_merge(struct att_vas *avas, struct vas *vas, int type)
 	vas_mm = vas->mm;
 	avas_mm = avas->mm;
 
-	dump_memory_map("Before VAS MM", vas_mm);
-
 	if (down_write_killable(&avas_mm->mmap_sem))
 		return -EINTR;
-	down_read_nested(&vas_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+	down_write_nested(&vas_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+
+	dump_memory_map("Before VAS MM", vas_mm);
 
 	/* Try to copy all VMAs of the VAS into the AS of the attached-VAS. */
 	for (vma = vas_mm->mmap; vma; vma = vma->vm_next) {
@@ -1445,11 +1442,11 @@ static int vas_merge(struct att_vas *avas, struct vas *vas, int type)
 	ret = 0;
 
 out_unlock:
-	up_read(&vas_mm->mmap_sem);
-	up_write(&avas_mm->mmap_sem);
-
 	dump_memory_map("After VAS MM", vas_mm);
 	dump_memory_map("After Attached-VAS MM", avas_mm);
+
+	up_write(&vas_mm->mmap_sem);
+	up_write(&avas_mm->mmap_sem);
 
 	return ret;
 }
@@ -1475,12 +1472,12 @@ static int vas_unmerge(struct att_vas *avas, struct vas *vas)
 	vas_mm = vas->mm;
 	avas_mm = avas->mm;
 
-	dump_memory_map("Before Attached-VAS MM", avas_mm);
-	dump_memory_map("Before VAS MM", vas_mm);
-
 	if (down_write_killable(&avas_mm->mmap_sem))
 		return -EINTR;
 	down_write_nested(&vas_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+
+	dump_memory_map("Before Attached-VAS MM", avas_mm);
+	dump_memory_map("Before VAS MM", vas_mm);
 
 	/* Update all VMAs of the VAS if they changed in the attached-VAS. */
 	for (vma = avas_mm->mmap, next = next_vma_safe(vma); vma;
@@ -1540,10 +1537,10 @@ static int vas_unmerge(struct att_vas *avas, struct vas *vas)
 	ret = 0;
 
 out_unlock:
+	dump_memory_map("After VAS MM", vas_mm);
+
 	up_write(&vas_mm->mmap_sem);
 	up_write(&avas_mm->mmap_sem);
-
-	dump_memory_map("After VAS MM", vas_mm);
 
 	return ret;
 }
@@ -1570,12 +1567,12 @@ static int __task_merge(struct att_vas *avas, struct task_struct *tsk,
 	tsk_mm = tsk->original_mm;
 	avas_mm = avas->mm;
 
-	dump_memory_map("Before Task MM", tsk_mm);
-	dump_memory_map("Before Attached-VAS MM", avas_mm);
-
 	if (down_write_killable(&avas_mm->mmap_sem))
 		return -EINTR;
-	down_read_nested(&tsk_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+	down_write_nested(&tsk_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+
+	dump_memory_map("Before Task MM", tsk_mm);
+	dump_memory_map("Before Attached-VAS MM", avas_mm);
 
 	/*
 	 * Try to copy all necessary memory regions from the task's memory
@@ -1583,6 +1580,13 @@ static int __task_merge(struct att_vas *avas, struct task_struct *tsk,
 	 */
 	for (vma = tsk_mm->mmap; vma; vma = vma->vm_next) {
 		bool copy_eagerly = default_copy_eagerly;
+
+		/*
+		 * Skip vm_areas that are marked as VAS_PRIVATE since they
+		 * should not be shared between the VAS.
+		 */
+		if (vma->vm_flags & VM_VAS_PRIVATE)
+			continue;
 
 		/*
 		 * The code region of the task will *always* be copied eagerly.
@@ -1616,11 +1620,11 @@ static int __task_merge(struct att_vas *avas, struct task_struct *tsk,
 	ret = 0;
 
 out_unlock:
-	up_read(&tsk_mm->mmap_sem);
-	up_write(&avas_mm->mmap_sem);
-
 	dump_memory_map("After Task MM", tsk_mm);
 	dump_memory_map("After Attached-VAS MM", avas_mm);
+
+	up_write(&tsk_mm->mmap_sem);
+	up_write(&avas_mm->mmap_sem);
 
 	return ret;
 }
@@ -1651,11 +1655,10 @@ static int task_unmerge(struct att_vas *avas, struct task_struct *tsk)
 	tsk_mm = tsk->original_mm;
 	avas_mm = avas->mm;
 
-	dump_memory_map("Before Task MM", tsk_mm);
-	dump_memory_map("Before Attached-VAS MM", avas_mm);
-
 	if (down_write_killable(&avas_mm->mmap_sem))
 		return -EINTR;
+
+	dump_memory_map("Before Attached-VAS MM", avas_mm);
 
 	/*
 	 * Since we are always syncing with the task's memory map at every
@@ -1679,10 +1682,9 @@ static int task_unmerge(struct att_vas *avas, struct task_struct *tsk)
 		remove_vm_area(avas_mm, vma);
 	}
 
-	up_write(&avas_mm->mmap_sem);
-
-	dump_memory_map("After Task MM", tsk_mm);
 	dump_memory_map("After Attached-VAS MM", avas_mm);
+
+	up_write(&avas_mm->mmap_sem);
 
 	return 0;
 }
@@ -1705,12 +1707,12 @@ static int vas_seg_merge(struct vas *vas, struct vas_seg *seg, int type)
 	vas_mm = vas->mm;
 	seg_mm = seg->mm;
 
-	dump_memory_map("Before VAS MM", vas_mm);
-	dump_memory_map("Before VAS segment MM", seg_mm);
-
 	if (down_write_killable(&vas_mm->mmap_sem))
 		return -EINTR;
-	down_read_nested(&seg_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+	down_write_nested(&seg_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+
+	dump_memory_map("Before VAS MM", vas_mm);
+	dump_memory_map("Before VAS segment MM", seg_mm);
 
 	/* Try to copy all VMAs of the VAS into the AS of the attached-VAS. */
 	for (vma = seg_mm->mmap; vma; vma = vma->vm_next) {
@@ -1745,11 +1747,11 @@ static int vas_seg_merge(struct vas *vas, struct vas_seg *seg, int type)
 	ret = 0;
 
 out_unlock:
-	up_read(&seg_mm->mmap_sem);
-	up_write(&vas_mm->mmap_sem);
-
 	dump_memory_map("After VAS MM", vas_mm);
 	dump_memory_map("After VAS segment MM", seg_mm);
+
+	up_write(&seg_mm->mmap_sem);
+	up_write(&vas_mm->mmap_sem);
 
 	return ret;
 }
@@ -1773,12 +1775,12 @@ static int vas_seg_unmerge(struct vas *vas, struct vas_seg *seg)
 	vas_mm = vas->mm;
 	seg_mm = seg->mm;
 
-	dump_memory_map("Before VAS MM", vas_mm);
-	dump_memory_map("Before VAS segment MM", seg_mm);
-
 	if (down_write_killable(&vas_mm->mmap_sem))
 		return -EINTR;
 	down_write_nested(&seg_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+
+	dump_memory_map("Before VAS MM", vas_mm);
+	dump_memory_map("Before VAS segment MM", seg_mm);
 
 	/* Update all memory regions which belonged to the VAS segment. */
 	for (vma = vas_mm->mmap, next = next_vma_safe(vma); vma;
@@ -1814,11 +1816,11 @@ static int vas_seg_unmerge(struct vas *vas, struct vas_seg *seg)
 	ret = 0;
 
 out_unlock:
-	up_write(&seg_mm->mmap_sem);
-	up_write(&vas_mm->mmap_sem);
-
 	dump_memory_map("After VAS MM", vas_mm);
 	dump_memory_map("After VAS segment MM", seg_mm);
+
+	up_write(&seg_mm->mmap_sem);
+	up_write(&vas_mm->mmap_sem);
 
 	return ret;
 }
@@ -1998,6 +2000,13 @@ static int sync_from_task(struct mm_struct *avas_mm, struct mm_struct *tsk_mm)
 	for (vma = tsk_mm->mmap; vma; vma = vma->vm_next) {
 		struct vm_area_struct *ref;
 
+		/*
+		 * Skip vm_areas that are marked as VAS_PRIVATE since they
+		 * should not be shared between the task's VAS.
+		 */
+		if (vma->vm_flags & VM_VAS_PRIVATE)
+			continue;
+
 		ref = vas_find_reference(avas_mm, vma);
 		if (!ref) {
 #ifdef CONFIG_VAS_LAZY_ATTACH
@@ -2055,9 +2064,40 @@ static int sync_to_task(struct mm_struct *avas_mm, struct mm_struct *tsk_mm)
 
 	ret = 0;
 	for (vma = avas_mm->mmap; vma; vma = vma->vm_next) {
-		if (vma->vas_reference != tsk_mm) {
+		/*
+		 * Skip vm_areas in the attached-VAS that are marked as
+		 * VAS_PRIVATE. Such vm_areas should reside in the VAS.
+		 */
+		if (vma->vm_flags & VM_VAS_PRIVATE)
+			continue;
+
+		if (vma->vas_reference == NULL) {
+			struct vm_area_struct *new_vma;
+
+			new_vma = copy_vm_area(avas_mm, vma, tsk_mm,
+					       vma->vm_flags, true);
+
+			if (!new_vma) {
+				pr_vas_debug("Failed to copy memory region (%#lx - %#lx) during task resync\n",
+					     vma->vm_start, vma->vm_end);
+				ret = -EFAULT;
+				break;
+			}
+
+			new_vma->vas_reference = NULL;
+			new_vma->vas_attached = false;
+
+			/*
+			 * Remember for the vm_area in the attached-VAS that it
+			 * was synchronized into the task (mark as attached and
+			 * add the reference).
+			 */
+			vma->vas_reference = tsk_mm;
+			vma->vas_attached = true;
+		} else if (vma->vas_reference != tsk_mm) {
 			pr_vas_debug("Skip unrelated memory region (%#lx - %#lx) during task resync\n",
 				     vma->vm_start, vma->vm_end);
+			continue;
 		} else if (vma->vas_attached) {
 			struct vm_area_struct *ref;
 
@@ -2097,6 +2137,14 @@ static int sync_task(struct mm_struct *avas_mm, struct mm_struct *tsk_mm,
 	src_mm = dir == 1 ? tsk_mm : avas_mm;
 	dst_mm = dir == 1 ? avas_mm : tsk_mm;
 
+	pr_vas_debug("Synchronize memory map from %s to %s\n",
+		     dir == 1 ? "task" : "attached-VAS",
+		     dir == 1 ? "attached-VAS" : "task");
+
+	if (down_write_killable(&dst_mm->mmap_sem))
+		return -EINTR;
+	down_write_nested(&src_mm->mmap_sem, SINGLE_DEPTH_NESTING);
+
 	/*
 	 * We have nothing to do if nothing has changed the memory maps since
 	 * the last sync.
@@ -2104,19 +2152,12 @@ static int sync_task(struct mm_struct *avas_mm, struct mm_struct *tsk_mm,
 	if (ktime_compare(src_mm->vas_last_update,
 			  dst_mm->vas_last_update) == 0) {
 		pr_vas_debug("Nothing to do during switch, memory map is up-to-date\n");
-		return 0;
+		ret = 0;
+		goto out_unlock;
 	}
-
-	pr_vas_debug("Synchronize memory map from %s to %s\n",
-		     dir == 1 ? "Task" : "Attached-VAS",
-		     dir == 1 ? "Attached-VAS" : "Task");
 
 	dump_memory_map("Before Task MM", tsk_mm);
 	dump_memory_map("Before Attached-VAS MM", avas_mm);
-
-	if (down_write_killable(&dst_mm->mmap_sem))
-		return -EINTR;
-	down_read_nested(&src_mm->mmap_sem, SINGLE_DEPTH_NESTING);
 
 	if (dir == 1)
 		ret = sync_from_task(avas_mm, tsk_mm);
@@ -2148,11 +2189,11 @@ static int sync_task(struct mm_struct *avas_mm, struct mm_struct *tsk_mm,
 	ret = 0;
 
 out_unlock:
-	up_read(&src_mm->mmap_sem);
-	up_write(&dst_mm->mmap_sem);
-
 	dump_memory_map("After Task MM", tsk_mm);
 	dump_memory_map("After Attached-VAS MM", avas_mm);
+
+	up_write(&src_mm->mmap_sem);
+	up_write(&dst_mm->mmap_sem);
 
 	return ret;
 }
@@ -2634,6 +2675,8 @@ int vas_switch(struct task_struct *tsk, int vid)
 
 	ctx = tsk->vas_ctx;
 	vas_context_lock(ctx);
+
+	pr_vas_debug("Switching VAS for task - pid: %d\n", tsk->pid);
 
 	if (vid == 0) {
 		pr_vas_debug("Switching to original mm\n");
@@ -3341,8 +3384,8 @@ int vas_clone(int clone_flags, struct task_struct *tsk)
 	if (clone_flags & CLONE_VM) {
 		ctx = current->vas_ctx;
 
-		pr_vas_debug("Copy VAS context (%p -- %d) for task - %p - from task - %p\n",
-			     ctx, ctx->refcount, tsk, current);
+		pr_vas_debug("Copy VAS context (%p -- %d) for task - %p - from task - pid: %d\n",
+			     ctx, ctx->refcount, tsk, current->pid);
 
 		vas_context_lock(ctx);
 		ctx->refcount++;
@@ -3377,20 +3420,20 @@ void vas_exit(struct task_struct *tsk)
 {
 	struct vas_context *ctx = tsk->vas_ctx;
 
+	pr_vas_debug("Exiting VAS context (%p -- %d) for task - %p - pid: %d\n", ctx,
+		     ctx->refcount, tsk, tsk->pid);
+
 	if (tsk->active_vas != 0) {
 		int error;
 
-		pr_vas_debug("Switch to original MM before exit for task - %p\n",
-			     tsk);
+		pr_vas_debug("Switch to original MM before exit for task - %p - pid: %d\n",
+			     tsk, tsk->pid);
 
 		error = vas_switch(tsk, 0);
 		if (error != 0)
 			pr_alert("Switching back to original MM failed with %d\n",
 				 error);
 	}
-
-	pr_vas_debug("Exiting VAS context (%p -- %d) for task - %p\n", ctx,
-		     ctx->refcount, tsk);
 
 	vas_context_lock(ctx);
 
@@ -3412,8 +3455,8 @@ void vas_exit(struct task_struct *tsk)
 			struct vas *vas = avas->vas;
 			int error;
 
-			pr_vas_debug("Detaching VAS - name: %s - from exiting task - pid: %d\n",
-				     vas->name, tsk->pid);
+			pr_vas_debug("Detaching VAS - name: %s - from exiting task - %p - pid: %d\n",
+				     vas->name, tsk, tsk->pid);
 
 			/*
 			 * Make sure our reference to the VAS is not deleted
@@ -3461,6 +3504,7 @@ int vas_lazy_attach_vma(struct vm_area_struct *vma)
 {
 	struct mm_struct *ref_mm, *mm;
 	struct vm_area_struct *ref_vma;
+	int ret;
 
 	if (likely(!vma->vas_reference))
 		return 0;
@@ -3472,8 +3516,8 @@ int vas_lazy_attach_vma(struct vm_area_struct *vma)
 
 	down_read_nested(&ref_mm->mmap_sem, SINGLE_DEPTH_NESTING);
 	ref_vma = vas_find_reference(ref_mm, vma);
-	up_read(&ref_mm->mmap_sem);
 	if (!ref_vma) {
+		up_read(&ref_mm->mmap_sem);
 		pr_vas_debug("Couldn't find VAS reference\n");
 		return 1;
 	}
@@ -3484,13 +3528,19 @@ int vas_lazy_attach_vma(struct vm_area_struct *vma)
 	if (unlikely(dup_page_range(mm, vma, ref_mm, ref_vma))) {
 		pr_vas_debug("Failed to copy page tables for VMA %p from %p\n",
 			     vma, ref_vma);
-		return 1;
+		ret = 1;
+		goto out_unlock;
 	}
 
 	vma->vas_last_update = ref_vma->vas_last_update;
 	vma->vas_attached = true;
 
-	return 0;
+	ret = 0;
+
+out_unlock:
+	up_read(&ref_mm->mmap_sem);
+
+	return ret;
 }
 
 #endif /* CONFIG_VAS_LAZY_ATTACH */

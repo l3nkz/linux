@@ -58,6 +58,9 @@
 					   overrides the coredump filter bits */
 #define MADV_DODUMP	17		/* Clear the MADV_DONTDUMP flag */
 
+#define MADV_VAS_PRIVATE 18		/* Do not share this vma with other VAS */
+#define MADV_VAS_SHARED	19		/* Clear the MADV_VAS_PRIVATE flag */
+
 /* compatibility flags */
 #define MAP_FILE	0
 

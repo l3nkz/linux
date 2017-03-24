@@ -1633,22 +1633,13 @@ dup_pmd_range(struct mm_struct *dst_mm, struct vm_area_struct *dst_vma,
 	do {
 		next = pmd_addr_end(addr, end);
 
-		if (pmd_none_or_clear_bad(src_pmd) &&
-		    pmd_none_or_clear_bad(dst_pmd)) {
-			continue;
-		} else if (pmd_none_or_clear_bad(src_pmd)) {
-			/* src unmapped, but dst not --> free dst too */
-			zap_pte_range(tlb, dst_vma, dst_pmd, addr, next, NULL);
-			free_pte_range(tlb, dst_pmd, addr);
-
-			continue;
-		} else if (pmd_trans_huge(*src_pmd) || pmd_devmap(*src_pmd)) {
+		if (pmd_trans_huge(*src_pmd) || pmd_devmap(*src_pmd)) {
 			int err;
 
 			VM_BUG_ON(next-addr != HPAGE_PMD_SIZE);
 
 			/*
-			 * We may need to unmap the content of the destination
+			 * We may need to zap the content of the destination
 			 * page table first. So check this here, because
 			 * inside dup_huge_pmd we cannot do it anymore.
 			 */
@@ -1669,6 +1660,15 @@ dup_pmd_range(struct mm_struct *dst_mm, struct vm_area_struct *dst_vma,
 				continue;
 			/* explicit fall through */
 
+		} else if (pmd_none_or_clear_bad(src_pmd) &&
+			   pmd_none_or_clear_bad(dst_pmd)) {
+			continue;
+		} else if (pmd_none_or_clear_bad(src_pmd)) {
+			/* src unmapped, but dst not --> free dst too */
+			zap_pte_range(tlb, dst_vma, dst_pmd, addr, next, NULL);
+			free_pte_range(tlb, dst_pmd, addr);
+
+			continue;
 		}
 
 		if (unlikely(dup_pte_range(dst_mm, dst_vma, src_mm, src_vma,

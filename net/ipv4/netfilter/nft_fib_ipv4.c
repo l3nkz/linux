@@ -26,22 +26,16 @@ static __be32 get_saddr(__be32 addr)
 	return addr;
 }
 
-static bool fib4_is_local(const struct sk_buff *skb)
-{
-	const struct rtable *rt = skb_rtable(skb);
-
-	return rt && (rt->rt_flags & RTCF_LOCAL);
-}
-
 #define DSCP_BITS     0xfc
 
 void nft_fib4_eval_type(const struct nft_expr *expr, struct nft_regs *regs,
 			const struct nft_pktinfo *pkt)
 {
 	const struct nft_fib *priv = nft_expr_priv(expr);
+	int noff = skb_network_offset(pkt->skb);
 	u32 *dst = &regs->data[priv->dreg];
 	const struct net_device *dev = NULL;
-	const struct iphdr *iph;
+	struct iphdr *iph, _iph;
 	__be32 addr;
 
 	if (priv->flags & NFTA_FIB_F_IIF)
@@ -49,7 +43,12 @@ void nft_fib4_eval_type(const struct nft_expr *expr, struct nft_regs *regs,
 	else if (priv->flags & NFTA_FIB_F_OIF)
 		dev = nft_out(pkt);
 
-	iph = ip_hdr(pkt->skb);
+	iph = skb_header_pointer(pkt->skb, noff, sizeof(_iph), &_iph);
+	if (!iph) {
+		regs->verdict.code = NFT_BREAK;
+		return;
+	}
+
 	if (priv->flags & NFTA_FIB_F_DADDR)
 		addr = iph->daddr;
 	else
@@ -68,8 +67,9 @@ void nft_fib4_eval(const struct nft_expr *expr, struct nft_regs *regs,
 		   const struct nft_pktinfo *pkt)
 {
 	const struct nft_fib *priv = nft_expr_priv(expr);
+	int noff = skb_network_offset(pkt->skb);
 	u32 *dest = &regs->data[priv->dreg];
-	const struct iphdr *iph;
+	struct iphdr *iph, _iph;
 	struct fib_result res;
 	struct flowi4 fl4 = {
 		.flowi4_scope = RT_SCOPE_UNIVERSE,
@@ -95,16 +95,23 @@ void nft_fib4_eval(const struct nft_expr *expr, struct nft_regs *regs,
 	else
 		oif = NULL;
 
-	if (nft_hook(pkt) == NF_INET_PRE_ROUTING && fib4_is_local(pkt->skb)) {
-		nft_fib_store_result(dest, priv->result, pkt, LOOPBACK_IFINDEX);
+	if (nft_hook(pkt) == NF_INET_PRE_ROUTING &&
+	    nft_fib_is_loopback(pkt->skb, nft_in(pkt))) {
+		nft_fib_store_result(dest, priv, pkt,
+				     nft_in(pkt)->ifindex);
 		return;
 	}
 
-	iph = ip_hdr(pkt->skb);
+	iph = skb_header_pointer(pkt->skb, noff, sizeof(_iph), &_iph);
+	if (!iph) {
+		regs->verdict.code = NFT_BREAK;
+		return;
+	}
+
 	if (ipv4_is_zeronet(iph->saddr)) {
 		if (ipv4_is_lbcast(iph->daddr) ||
 		    ipv4_is_local_multicast(iph->daddr)) {
-			nft_fib_store_result(dest, priv->result, pkt,
+			nft_fib_store_result(dest, priv, pkt,
 					     get_ifindex(pkt->skb->dev));
 			return;
 		}
@@ -131,7 +138,7 @@ void nft_fib4_eval(const struct nft_expr *expr, struct nft_regs *regs,
 	switch (res.type) {
 	case RTN_UNICAST:
 		break;
-	case RTN_LOCAL:	/* should not appear here, see fib4_is_local() above */
+	case RTN_LOCAL: /* Should not see RTN_LOCAL here */
 		return;
 	default:
 		break;
@@ -217,7 +224,7 @@ nft_fib4_select_ops(const struct nft_ctx *ctx,
 
 static struct nft_expr_type nft_fib4_type __read_mostly = {
 	.name		= "fib",
-	.select_ops	= &nft_fib4_select_ops,
+	.select_ops	= nft_fib4_select_ops,
 	.policy		= nft_fib_policy,
 	.maxattr	= NFTA_FIB_MAX,
 	.family		= NFPROTO_IPV4,

@@ -12,6 +12,7 @@
  */
 
 #include <linux/errno.h>
+#include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/sockios.h>
@@ -45,7 +46,7 @@
 #include <net/seg6_hmac.h>
 #include <linux/random.h>
 
-static char * __percpu *hmac_ring;
+static DEFINE_PER_CPU(char [SEG6_HMAC_RING_SIZE], hmac_ring);
 
 static int seg6_hmac_cmpfn(struct rhashtable_compare_arg *arg, const void *obj)
 {
@@ -110,7 +111,7 @@ static struct seg6_hmac_algo *__hmac_get_algo(u8 alg_id)
 	struct seg6_hmac_algo *algo;
 	int i, alg_count;
 
-	alg_count = sizeof(hmac_algos) / sizeof(struct seg6_hmac_algo);
+	alg_count = ARRAY_SIZE(hmac_algos);
 	for (i = 0; i < alg_count; i++) {
 		algo = &hmac_algos[i];
 		if (algo->alg_id == alg_id)
@@ -174,7 +175,7 @@ int seg6_hmac_compute(struct seg6_hmac_info *hinfo, struct ipv6_sr_hdr *hdr,
 	 * hash function (RadioGatun) with up to 1216 bits
 	 */
 
-	/* saddr(16) + first_seg(1) + cleanup(1) + keyid(4) + seglist(16n) */
+	/* saddr(16) + first_seg(1) + flags(1) + keyid(4) + seglist(16n) */
 	plen = 16 + 1 + 1 + 4 + (hdr->first_segment + 1) * 16;
 
 	/* this limit allows for 14 segments */
@@ -186,13 +187,13 @@ int seg6_hmac_compute(struct seg6_hmac_info *hinfo, struct ipv6_sr_hdr *hdr,
 	 *
 	 * 1. Source IPv6 address (128 bits)
 	 * 2. first_segment value (8 bits)
-	 * 3. cleanup flag (8 bits: highest bit is cleanup value, others are 0)
+	 * 3. Flags (8 bits)
 	 * 4. HMAC Key ID (32 bits)
 	 * 5. All segments in the segments list (n * 128 bits)
 	 */
 
 	local_bh_disable();
-	ring = *this_cpu_ptr(hmac_ring);
+	ring = this_cpu_ptr(hmac_ring);
 	off = ring;
 
 	/* source address */
@@ -202,8 +203,8 @@ int seg6_hmac_compute(struct seg6_hmac_info *hinfo, struct ipv6_sr_hdr *hdr,
 	/* first_segment value */
 	*off++ = hdr->first_segment;
 
-	/* cleanup flag */
-	*off++ = !!(sr_has_cleanup(hdr)) << 7;
+	/* flags */
+	*off++ = hdr->flags;
 
 	/* HMAC Key ID */
 	memcpy(off, &hmackeyid, 4);
@@ -353,27 +354,6 @@ out:
 }
 EXPORT_SYMBOL(seg6_push_hmac);
 
-static int seg6_hmac_init_ring(void)
-{
-	int i;
-
-	hmac_ring = alloc_percpu(char *);
-
-	if (!hmac_ring)
-		return -ENOMEM;
-
-	for_each_possible_cpu(i) {
-		char *ring = kzalloc(SEG6_HMAC_RING_SIZE, GFP_KERNEL);
-
-		if (!ring)
-			return -ENOMEM;
-
-		*per_cpu_ptr(hmac_ring, i) = ring;
-	}
-
-	return 0;
-}
-
 static int seg6_hmac_init_algo(void)
 {
 	struct seg6_hmac_algo *algo;
@@ -381,7 +361,7 @@ static int seg6_hmac_init_algo(void)
 	struct shash_desc *shash;
 	int i, alg_count, cpu;
 
-	alg_count = sizeof(hmac_algos) / sizeof(struct seg6_hmac_algo);
+	alg_count = ARRAY_SIZE(hmac_algos);
 
 	for (i = 0; i < alg_count; i++) {
 		struct crypto_shash **p_tfm;
@@ -400,7 +380,7 @@ static int seg6_hmac_init_algo(void)
 			*p_tfm = tfm;
 		}
 
-		p_tfm = this_cpu_ptr(algo->tfms);
+		p_tfm = raw_cpu_ptr(algo->tfms);
 		tfm = *p_tfm;
 
 		shsize = sizeof(*shash) + crypto_shash_descsize(tfm);
@@ -410,7 +390,8 @@ static int seg6_hmac_init_algo(void)
 			return -ENOMEM;
 
 		for_each_possible_cpu(cpu) {
-			shash = kzalloc(shsize, GFP_KERNEL);
+			shash = kzalloc_node(shsize, GFP_KERNEL,
+					     cpu_to_node(cpu));
 			if (!shash)
 				return -ENOMEM;
 			*per_cpu_ptr(algo->shashs, cpu) = shash;
@@ -422,16 +403,7 @@ static int seg6_hmac_init_algo(void)
 
 int __init seg6_hmac_init(void)
 {
-	int ret;
-
-	ret = seg6_hmac_init_ring();
-	if (ret < 0)
-		goto out;
-
-	ret = seg6_hmac_init_algo();
-
-out:
-	return ret;
+	return seg6_hmac_init_algo();
 }
 EXPORT_SYMBOL(seg6_hmac_init);
 
@@ -450,14 +422,7 @@ void seg6_hmac_exit(void)
 	struct seg6_hmac_algo *algo = NULL;
 	int i, alg_count, cpu;
 
-	for_each_possible_cpu(i) {
-		char *ring = *per_cpu_ptr(hmac_ring, i);
-
-		kfree(ring);
-	}
-	free_percpu(hmac_ring);
-
-	alg_count = sizeof(hmac_algos) / sizeof(struct seg6_hmac_algo);
+	alg_count = ARRAY_SIZE(hmac_algos);
 	for (i = 0; i < alg_count; i++) {
 		algo = &hmac_algos[i];
 		for_each_possible_cpu(cpu) {

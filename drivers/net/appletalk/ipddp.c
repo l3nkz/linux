@@ -33,7 +33,7 @@
 #include <linux/if_arp.h>
 #include <linux/slab.h>
 #include <net/route.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include "ipddp.h"		/* Our stuff */
 
@@ -190,7 +190,7 @@ static netdev_tx_t ipddp_xmit(struct sk_buff *skb, struct net_device *dev)
  */
 static int ipddp_create(struct ipddp_route *new_rt)
 {
-        struct ipddp_route *rt = kmalloc(sizeof(*rt), GFP_KERNEL);
+        struct ipddp_route *rt = kzalloc(sizeof(*rt), GFP_KERNEL);
 
         if (rt == NULL)
                 return -ENOMEM;
@@ -311,9 +311,7 @@ module_param(ipddp_mode, int, 0);
 static int __init ipddp_init_module(void)
 {
 	dev_ipddp = ipddp_init();
-        if (IS_ERR(dev_ipddp))
-                return PTR_ERR(dev_ipddp);
-	return 0;
+	return PTR_ERR_OR_ZERO(dev_ipddp);
 }
 
 static void __exit ipddp_cleanup_module(void)

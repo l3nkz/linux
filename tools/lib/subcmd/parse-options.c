@@ -1,4 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/compiler.h>
+#include <linux/string.h>
 #include <linux/types.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -213,6 +215,9 @@ static int get_value(struct parse_opt_ctx_t *p,
 		else
 			err = get_arg(p, opt, flags, (const char **)opt->value);
 
+		if (opt->set)
+			*(bool *)opt->set = true;
+
 		/* PARSE_OPT_NOEMPTY: Allow NULL but disallow empty string. */
 		if (opt->flags & PARSE_OPT_NOEMPTY) {
 			const char *val = *(const char **)opt->value;
@@ -267,6 +272,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		}
 		if (get_arg(p, opt, flags, &arg))
 			return -1;
+		if (arg[0] == '-')
+			return opterror(opt, "expects an unsigned numerical value", flags);
 		*(unsigned int *)opt->value = strtol(arg, (char **)&s, 10);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
@@ -299,6 +306,8 @@ static int get_value(struct parse_opt_ctx_t *p,
 		}
 		if (get_arg(p, opt, flags, &arg))
 			return -1;
+		if (arg[0] == '-')
+			return opterror(opt, "expects an unsigned numerical value", flags);
 		*(u64 *)opt->value = strtoull(arg, (char **)&s, 10);
 		if (*s)
 			return opterror(opt, "expects a numerical value", flags);
@@ -360,7 +369,7 @@ retry:
 			return 0;
 		}
 		if (!rest) {
-			if (!prefixcmp(options->long_name, "no-")) {
+			if (strstarts(options->long_name, "no-")) {
 				/*
 				 * The long name itself starts with "no-", so
 				 * accept the option without "no-" so that users
@@ -373,7 +382,7 @@ retry:
 					goto match;
 				}
 				/* Abbreviated case */
-				if (!prefixcmp(options->long_name + 3, arg)) {
+				if (strstarts(options->long_name + 3, arg)) {
 					flags |= OPT_UNSET;
 					goto is_abbreviated;
 				}
@@ -398,7 +407,7 @@ is_abbreviated:
 				continue;
 			}
 			/* negated and abbreviated very much? */
-			if (!prefixcmp("no-", arg)) {
+			if (strstarts("no-", arg)) {
 				flags |= OPT_UNSET;
 				goto is_abbreviated;
 			}
@@ -408,7 +417,7 @@ is_abbreviated:
 			flags |= OPT_UNSET;
 			rest = skip_prefix(arg + 3, options->long_name);
 			/* abbreviated and negated? */
-			if (!rest && !prefixcmp(options->long_name, arg + 3))
+			if (!rest && strstarts(options->long_name, arg + 3))
 				goto is_abbreviated;
 			if (!rest)
 				continue;
@@ -448,7 +457,7 @@ static void check_typos(const char *arg, const struct option *options)
 	if (strlen(arg) < 3)
 		return;
 
-	if (!prefixcmp(arg, "no-")) {
+	if (strstarts(arg, "no-")) {
 		fprintf(stderr, " Error: did you mean `--%s` (with two dashes ?)", arg);
 		exit(129);
 	}
@@ -456,7 +465,7 @@ static void check_typos(const char *arg, const struct option *options)
 	for (; options->type != OPTION_END; options++) {
 		if (!options->long_name)
 			continue;
-		if (!prefixcmp(options->long_name, arg)) {
+		if (strstarts(options->long_name, arg)) {
 			fprintf(stderr, " Error: did you mean `--%s` (with two dashes ?)", arg);
 			exit(129);
 		}
@@ -925,10 +934,10 @@ opt:
 		if (opts->long_name == NULL)
 			continue;
 
-		if (!prefixcmp(opts->long_name, optstr))
+		if (strstarts(opts->long_name, optstr))
 			print_option_help(opts, 0);
-		if (!prefixcmp("no-", optstr) &&
-		    !prefixcmp(opts->long_name, optstr + 3))
+		if (strstarts("no-", optstr) &&
+		    strstarts(opts->long_name, optstr + 3))
 			print_option_help(opts, 0);
 	}
 

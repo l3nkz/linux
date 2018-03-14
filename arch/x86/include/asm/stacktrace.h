@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  Copyright (C) 1991, 1992  Linus Torvalds
  *  Copyright (C) 2000, 2001, 2002 Andi Kleen, SuSE Labs
@@ -58,7 +59,7 @@ get_frame_pointer(struct task_struct *task, struct pt_regs *regs)
 	if (task == current)
 		return __builtin_frame_address(0);
 
-	return (unsigned long *)((struct inactive_task_frame *)task->thread.sp)->bp;
+	return &((struct inactive_task_frame *)task->thread.sp)->bp;
 }
 #else
 static inline unsigned long *

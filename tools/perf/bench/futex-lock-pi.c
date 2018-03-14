@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2015 Davidlohr Bueso.
  */
 
 /* For the CLR_() macros */
+#include <string.h>
 #include <pthread.h>
 
 #include <signal.h>
@@ -48,7 +50,7 @@ static const struct option options[] = {
 };
 
 static const char * const bench_futex_lock_pi_usage[] = {
-	"perf bench futex requeue <options>",
+	"perf bench futex lock-pi <options>",
 	NULL
 };
 
@@ -139,8 +141,7 @@ static void create_threads(struct worker *w, pthread_attr_t thread_attr)
 	}
 }
 
-int bench_futex_lock_pi(int argc, const char **argv,
-			const char *prefix __maybe_unused)
+int bench_futex_lock_pi(int argc, const char **argv)
 {
 	int ret = 0;
 	unsigned int i;
@@ -152,7 +153,6 @@ int bench_futex_lock_pi(int argc, const char **argv,
 		goto err;
 
 	ncpus = sysconf(_SC_NPROCESSORS_ONLN);
-	nsecs = futexbench_sanitize_numeric(nsecs);
 
 	sigfillset(&act.sa_mask);
 	act.sa_sigaction = toggle_done;
@@ -160,8 +160,6 @@ int bench_futex_lock_pi(int argc, const char **argv,
 
 	if (!nthreads)
 		nthreads = ncpus;
-	else
-		nthreads = futexbench_sanitize_numeric(nthreads);
 
 	worker = calloc(nthreads, sizeof(*worker));
 	if (!worker)

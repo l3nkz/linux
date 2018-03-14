@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_VIRTIO_NET_H
 #define _LINUX_VIRTIO_NET_H
 
@@ -17,9 +18,6 @@ static inline int virtio_net_hdr_to_skb(struct sk_buff *skb,
 			break;
 		case VIRTIO_NET_HDR_GSO_TCPV6:
 			gso_type = SKB_GSO_TCPV6;
-			break;
-		case VIRTIO_NET_HDR_GSO_UDP:
-			gso_type = SKB_GSO_UDP;
 			break;
 		default:
 			return -EINVAL;
@@ -56,7 +54,8 @@ static inline int virtio_net_hdr_to_skb(struct sk_buff *skb,
 
 static inline int virtio_net_hdr_from_skb(const struct sk_buff *skb,
 					  struct virtio_net_hdr *hdr,
-					  bool little_endian)
+					  bool little_endian,
+					  bool has_data_valid)
 {
 	memset(hdr, 0, sizeof(*hdr));   /* no info leak */
 
@@ -72,8 +71,6 @@ static inline int virtio_net_hdr_from_skb(const struct sk_buff *skb,
 			hdr->gso_type = VIRTIO_NET_HDR_GSO_TCPV4;
 		else if (sinfo->gso_type & SKB_GSO_TCPV6)
 			hdr->gso_type = VIRTIO_NET_HDR_GSO_TCPV6;
-		else if (sinfo->gso_type & SKB_GSO_UDP)
-			hdr->gso_type = VIRTIO_NET_HDR_GSO_UDP;
 		else
 			return -EINVAL;
 		if (sinfo->gso_type & SKB_GSO_TCP_ECN)
@@ -91,7 +88,8 @@ static inline int virtio_net_hdr_from_skb(const struct sk_buff *skb,
 				skb_checksum_start_offset(skb));
 		hdr->csum_offset = __cpu_to_virtio16(little_endian,
 				skb->csum_offset);
-	} else if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
+	} else if (has_data_valid &&
+		   skb->ip_summed == CHECKSUM_UNNECESSARY) {
 		hdr->flags = VIRTIO_NET_HDR_F_DATA_VALID;
 	} /* else everything is zero */
 

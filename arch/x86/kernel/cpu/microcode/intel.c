@@ -1,7 +1,7 @@
 /*
  * Intel CPU Microcode Update Driver for Linux
  *
- * Copyright (C) 2000-2006 Tigran Aivazian <tigran@aivazian.fsnet.co.uk>
+ * Copyright (C) 2000-2006 Tigran Aivazian <aivazian.tigran@gmail.com>
  *		 2006 Shaohua Li <shaohua.li@intel.com>
  *
  * Intel CPU microcode early update for Linux
@@ -34,6 +34,7 @@
 #include <linux/mm.h>
 
 #include <asm/microcode_intel.h>
+#include <asm/intel-family.h>
 #include <asm/processor.h>
 #include <asm/tlbflush.h>
 #include <asm/setup.h>
@@ -41,8 +42,8 @@
 
 static const char ucode_path[] = "kernel/x86/microcode/GenuineIntel.bin";
 
-/* Current microcode patch used in early patching */
-struct microcode_intel *intel_ucode_patch;
+/* Current microcode patch used in early patching on the APs. */
+static struct microcode_intel *intel_ucode_patch;
 
 static inline bool cpu_signatures_match(unsigned int s1, unsigned int p1,
 					unsigned int s2, unsigned int p2)
@@ -146,18 +147,18 @@ static bool microcode_matches(struct microcode_header_intel *mc_header,
 	return false;
 }
 
-static struct ucode_patch *__alloc_microcode_buf(void *data, unsigned int size)
+static struct ucode_patch *memdup_patch(void *data, unsigned int size)
 {
 	struct ucode_patch *p;
 
-	p = kzalloc(size, GFP_KERNEL);
+	p = kzalloc(sizeof(struct ucode_patch), GFP_KERNEL);
 	if (!p)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	p->data = kmemdup(data, size, GFP_KERNEL);
 	if (!p->data) {
 		kfree(p);
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 	}
 
 	return p;
@@ -166,7 +167,7 @@ static struct ucode_patch *__alloc_microcode_buf(void *data, unsigned int size)
 static void save_microcode_patch(void *data, unsigned int size)
 {
 	struct microcode_header_intel *mc_hdr, *mc_saved_hdr;
-	struct ucode_patch *iter, *tmp, *p;
+	struct ucode_patch *iter, *tmp, *p = NULL;
 	bool prev_found = false;
 	unsigned int sig, pf;
 
@@ -183,8 +184,8 @@ static void save_microcode_patch(void *data, unsigned int size)
 			if (mc_hdr->rev <= mc_saved_hdr->rev)
 				continue;
 
-			p = __alloc_microcode_buf(data, size);
-			if (IS_ERR(p))
+			p = memdup_patch(data, size);
+			if (!p)
 				pr_err("Error allocating buffer %p\n", data);
 			else
 				list_replace(&iter->plist, &p->plist);
@@ -196,12 +197,25 @@ static void save_microcode_patch(void *data, unsigned int size)
 	 * newly found.
 	 */
 	if (!prev_found) {
-		p = __alloc_microcode_buf(data, size);
-		if (IS_ERR(p))
+		p = memdup_patch(data, size);
+		if (!p)
 			pr_err("Error allocating buffer for %p\n", data);
 		else
 			list_add_tail(&p->plist, &microcode_cache);
 	}
+
+	if (!p)
+		return;
+
+	/*
+	 * Save for early loading. On 32-bit, that needs to be a physical
+	 * address as the APs are running from physical addresses, before
+	 * paging has been enabled.
+	 */
+	if (IS_ENABLED(CONFIG_X86_32))
+		intel_ucode_patch = (struct microcode_intel *)__pa_nodebug(p->data);
+	else
+		intel_ucode_patch = p->data;
 }
 
 static int microcode_sanity_check(void *mc, int print_err)
@@ -390,15 +404,8 @@ static int collect_cpu_info_early(struct ucode_cpu_info *uci)
 		native_rdmsr(MSR_IA32_PLATFORM_ID, val[0], val[1]);
 		csig.pf = 1 << ((val[1] >> 18) & 7);
 	}
-	native_wrmsrl(MSR_IA32_UCODE_REV, 0);
 
-	/* As documented in the SDM: Do a CPUID 1 here */
-	sync_core();
-
-	/* get the current revision from MSR 0x8B */
-	native_rdmsr(MSR_IA32_UCODE_REV, val[0], val[1]);
-
-	csig.rev = val[1];
+	csig.rev = intel_get_microcode_revision();
 
 	uci->cpu_sig = csig;
 	uci->valid = 1;
@@ -582,7 +589,7 @@ static inline void print_ucode(struct ucode_cpu_info *uci)
 static int apply_microcode_early(struct ucode_cpu_info *uci, bool early)
 {
 	struct microcode_intel *mc;
-	unsigned int val[2];
+	u32 rev;
 
 	mc = uci->mc;
 	if (!mc)
@@ -590,21 +597,16 @@ static int apply_microcode_early(struct ucode_cpu_info *uci, bool early)
 
 	/* write microcode via MSR 0x79 */
 	native_wrmsrl(MSR_IA32_UCODE_WRITE, (unsigned long)mc->bits);
-	native_wrmsrl(MSR_IA32_UCODE_REV, 0);
 
-	/* As documented in the SDM: Do a CPUID 1 here */
-	sync_core();
-
-	/* get the current revision from MSR 0x8B */
-	native_rdmsr(MSR_IA32_UCODE_REV, val[0], val[1]);
-	if (val[1] != mc->hdr.rev)
+	rev = intel_get_microcode_revision();
+	if (rev != mc->hdr.rev)
 		return -1;
 
 #ifdef CONFIG_X86_64
 	/* Flush global tlb. This is precaution. */
 	flush_tlb_early();
 #endif
-	uci->cpu_sig.rev = val[1];
+	uci->cpu_sig.rev = rev;
 
 	if (early)
 		print_ucode(uci);
@@ -620,10 +622,12 @@ int __init save_microcode_in_initrd_intel(void)
 	struct cpio_data cp;
 
 	/*
-	 * AP loading didn't find any microcode patch, no need to save anything.
+	 * initrd is going away, clear patch ptr. We will scan the microcode one
+	 * last time before jettisoning and save a patch, if found. Then we will
+	 * update that pointer too, with a stable patch address to use when
+	 * resuming the cores.
 	 */
-	if (!intel_ucode_patch || IS_ERR(intel_ucode_patch))
-		return 0;
+	intel_ucode_patch = NULL;
 
 	if (!load_builtin_intel_microcode(&cp))
 		cp = find_microcode_in_initrd(ucode_path, false);
@@ -639,7 +643,6 @@ int __init save_microcode_in_initrd_intel(void)
 
 	return 0;
 }
-
 
 /*
  * @res_patch, output: a pointer to the patch we found.
@@ -784,8 +787,8 @@ static int apply_microcode_intel(int cpu)
 	struct microcode_intel *mc;
 	struct ucode_cpu_info *uci;
 	struct cpuinfo_x86 *c;
-	unsigned int val[2];
 	static int prev_rev;
+	u32 rev;
 
 	/* We should bind the task to the CPU */
 	if (WARN_ON(raw_smp_processor_id() != cpu))
@@ -802,33 +805,28 @@ static int apply_microcode_intel(int cpu)
 
 	/* write microcode via MSR 0x79 */
 	wrmsrl(MSR_IA32_UCODE_WRITE, (unsigned long)mc->bits);
-	wrmsrl(MSR_IA32_UCODE_REV, 0);
 
-	/* As documented in the SDM: Do a CPUID 1 here */
-	sync_core();
+	rev = intel_get_microcode_revision();
 
-	/* get the current revision from MSR 0x8B */
-	rdmsr(MSR_IA32_UCODE_REV, val[0], val[1]);
-
-	if (val[1] != mc->hdr.rev) {
+	if (rev != mc->hdr.rev) {
 		pr_err("CPU%d update to revision 0x%x failed\n",
 		       cpu, mc->hdr.rev);
 		return -1;
 	}
 
-	if (val[1] != prev_rev) {
+	if (rev != prev_rev) {
 		pr_info("updated to revision 0x%x, date = %04x-%02x-%02x\n",
-			val[1],
+			rev,
 			mc->hdr.date & 0xffff,
 			mc->hdr.date >> 24,
 			(mc->hdr.date >> 16) & 0xff);
-		prev_rev = val[1];
+		prev_rev = rev;
 	}
 
 	c = &cpu_data(cpu);
 
-	uci->cpu_sig.rev = val[1];
-	c->microcode = val[1];
+	uci->cpu_sig.rev = rev;
+	c->microcode = rev;
 
 	return 0;
 }
@@ -840,7 +838,7 @@ static enum ucode_state generic_load_microcode(int cpu, void *data, size_t size,
 	u8 *ucode_ptr = data, *new_mc = NULL, *mc = NULL;
 	int new_rev = uci->cpu_sig.rev;
 	unsigned int leftover = size;
-	unsigned int curr_mc_size = 0;
+	unsigned int curr_mc_size = 0, new_mc_size = 0;
 	unsigned int csig, cpf;
 
 	while (leftover) {
@@ -881,6 +879,7 @@ static enum ucode_state generic_load_microcode(int cpu, void *data, size_t size,
 			vfree(new_mc);
 			new_rev = mc_header.rev;
 			new_mc  = mc;
+			new_mc_size = mc_size;
 			mc = NULL;	/* trigger new vmalloc */
 		}
 
@@ -906,7 +905,7 @@ static enum ucode_state generic_load_microcode(int cpu, void *data, size_t size,
 	 * permanent memory. So it will be loaded early when a CPU is hot added
 	 * or resumes.
 	 */
-	save_mc_for_early(new_mc, curr_mc_size);
+	save_mc_for_early(new_mc, new_mc_size);
 
 	pr_debug("CPU%d found a matching microcode update with version 0x%x (current=0x%x)\n",
 		 cpu, new_rev, uci->cpu_sig.rev);
@@ -920,6 +919,18 @@ static int get_ucode_fw(void *to, const void *from, size_t n)
 	return 0;
 }
 
+static bool is_blacklisted(unsigned int cpu)
+{
+	struct cpuinfo_x86 *c = &cpu_data(cpu);
+
+	if (c->x86 == 6 && c->x86_model == INTEL_FAM6_BROADWELL_X) {
+		pr_err_once("late loading on model 79 is disabled.\n");
+		return true;
+	}
+
+	return false;
+}
+
 static enum ucode_state request_microcode_fw(int cpu, struct device *device,
 					     bool refresh_fw)
 {
@@ -927,6 +938,9 @@ static enum ucode_state request_microcode_fw(int cpu, struct device *device,
 	struct cpuinfo_x86 *c = &cpu_data(cpu);
 	const struct firmware *firmware;
 	enum ucode_state ret;
+
+	if (is_blacklisted(cpu))
+		return UCODE_NFOUND;
 
 	sprintf(name, "intel-ucode/%02x-%02x-%02x",
 		c->x86, c->x86_model, c->x86_mask);
@@ -952,6 +966,9 @@ static int get_ucode_user(void *to, const void *from, size_t n)
 static enum ucode_state
 request_microcode_user(int cpu, const void __user *buf, size_t size)
 {
+	if (is_blacklisted(cpu))
+		return UCODE_NFOUND;
+
 	return generic_load_microcode(cpu, (void *)buf, size, &get_ucode_user);
 }
 

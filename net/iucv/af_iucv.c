@@ -17,7 +17,7 @@
 #include <linux/list.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/skbuff.h>
 #include <linux/init.h>
@@ -322,8 +322,7 @@ static int afiucv_hs_send(struct iucv_message *imsg, struct sock *sock,
 	int err, confirm_recv = 0;
 
 	memset(skb->head, 0, ETH_HLEN);
-	phs_hdr = (struct af_iucv_trans_hdr *)skb_push(skb,
-					sizeof(struct af_iucv_trans_hdr));
+	phs_hdr = skb_push(skb, sizeof(struct af_iucv_trans_hdr));
 	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 	skb_push(skb, ETH_HLEN);
@@ -363,7 +362,7 @@ static int afiucv_hs_send(struct iucv_message *imsg, struct sock *sock,
 		else
 			skb_trim(skb, skb->dev->mtu);
 	}
-	skb->protocol = ETH_P_AF_IUCV;
+	skb->protocol = cpu_to_be16(ETH_P_AF_IUCV);
 	nskb = skb_clone(skb, GFP_ATOMIC);
 	if (!nskb)
 		return -ENOMEM;
@@ -403,7 +402,7 @@ static void iucv_sock_destruct(struct sock *sk)
 	}
 
 	WARN_ON(atomic_read(&sk->sk_rmem_alloc));
-	WARN_ON(atomic_read(&sk->sk_wmem_alloc));
+	WARN_ON(refcount_read(&sk->sk_wmem_alloc));
 	WARN_ON(sk->sk_wmem_queued);
 	WARN_ON(sk->sk_forward_alloc);
 }
@@ -716,10 +715,8 @@ static int iucv_sock_bind(struct socket *sock, struct sockaddr *addr,
 	char uid[9];
 
 	/* Verify the input sockaddr */
-	if (!addr || addr->sa_family != AF_IUCV)
-		return -EINVAL;
-
-	if (addr_len < sizeof(struct sockaddr_iucv))
+	if (addr_len < sizeof(struct sockaddr_iucv) ||
+	    addr->sa_family != AF_IUCV)
 		return -EINVAL;
 
 	lock_sock(sk);
@@ -863,7 +860,7 @@ static int iucv_sock_connect(struct socket *sock, struct sockaddr *addr,
 	struct iucv_sock *iucv = iucv_sk(sk);
 	int err;
 
-	if (addr->sa_family != AF_IUCV || alen < sizeof(struct sockaddr_iucv))
+	if (alen < sizeof(struct sockaddr_iucv) || addr->sa_family != AF_IUCV)
 		return -EINVAL;
 
 	if (sk->sk_state != IUCV_OPEN && sk->sk_state != IUCV_BOUND)
@@ -938,7 +935,7 @@ done:
 
 /* Accept a pending connection */
 static int iucv_sock_accept(struct socket *sock, struct socket *newsock,
-			    int flags)
+			    int flags, bool kern)
 {
 	DECLARE_WAITQUEUE(wait, current);
 	struct sock *sk = sock->sk, *nsk;
@@ -1044,7 +1041,8 @@ static int iucv_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 {
 	struct sock *sk = sock->sk;
 	struct iucv_sock *iucv = iucv_sk(sk);
-	size_t headroom, linear;
+	size_t headroom = 0;
+	size_t linear;
 	struct sk_buff *skb;
 	struct iucv_message txmsg = {0};
 	struct cmsghdr *cmsg;
@@ -1122,18 +1120,20 @@ static int iucv_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 	 * this is fine for SOCK_SEQPACKET (unless we want to support
 	 * segmented records using the MSG_EOR flag), but
 	 * for SOCK_STREAM we might want to improve it in future */
-	headroom = (iucv->transport == AF_IUCV_TRANS_HIPER)
-		   ? sizeof(struct af_iucv_trans_hdr) + ETH_HLEN : 0;
-	if (headroom + len < PAGE_SIZE) {
+	if (iucv->transport == AF_IUCV_TRANS_HIPER) {
+		headroom = sizeof(struct af_iucv_trans_hdr) + ETH_HLEN;
 		linear = len;
 	} else {
-		/* In nonlinear "classic" iucv skb,
-		 * reserve space for iucv_array
-		 */
-		if (iucv->transport != AF_IUCV_TRANS_HIPER)
-			headroom += sizeof(struct iucv_array) *
-				    (MAX_SKB_FRAGS + 1);
-		linear = PAGE_SIZE - headroom;
+		if (len < PAGE_SIZE) {
+			linear = len;
+		} else {
+			/* In nonlinear "classic" iucv skb,
+			 * reserve space for iucv_array
+			 */
+			headroom = sizeof(struct iucv_array) *
+				   (MAX_SKB_FRAGS + 1);
+			linear = PAGE_SIZE - headroom;
+		}
 	}
 	skb = sock_alloc_send_pskb(sk, headroom + linear, len - linear,
 				   noblock, &err, 0);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Split spinlock implementation out into its own file, so it can be
  * compiled in a FTRACE-compatible way.
@@ -140,25 +141,6 @@ void __init xen_init_spinlocks(void)
 	pv_lock_ops.kick = xen_qlock_kick;
 	pv_lock_ops.vcpu_is_preempted = PV_CALLEE_SAVE(xen_vcpu_stolen);
 }
-
-/*
- * While the jump_label init code needs to happend _after_ the jump labels are
- * enabled and before SMP is started. Hence we use pre-SMP initcall level
- * init. We cannot do it in xen_init_spinlocks as that is done before
- * jump labels are activated.
- */
-static __init int xen_init_spinlocks_jump(void)
-{
-	if (!xen_pvspin)
-		return 0;
-
-	if (!xen_domain())
-		return 0;
-
-	static_key_slow_inc(&paravirt_ticketlocks_enabled);
-	return 0;
-}
-early_initcall(xen_init_spinlocks_jump);
 
 static __init int xen_parse_nopvspin(char *arg)
 {

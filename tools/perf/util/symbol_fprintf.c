@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <elf.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -21,7 +22,7 @@ size_t __symbol__fprintf_symname_offs(const struct symbol *sym,
 	unsigned long offset;
 	size_t length;
 
-	if (sym && sym->name) {
+	if (sym) {
 		length = fprintf(fp, "%s", sym->name);
 		if (al && print_offsets) {
 			if (al->addr < sym->end)

@@ -103,16 +103,14 @@ static int bman_portal_probe(struct platform_device *pdev)
 	addr_phys[0] = platform_get_resource(pdev, IORESOURCE_MEM,
 					     DPAA_PORTAL_CE);
 	if (!addr_phys[0]) {
-		dev_err(dev, "Can't get %s property 'reg::CE'\n",
-			node->full_name);
+		dev_err(dev, "Can't get %pOF property 'reg::CE'\n", node);
 		return -ENXIO;
 	}
 
 	addr_phys[1] = platform_get_resource(pdev, IORESOURCE_MEM,
 					     DPAA_PORTAL_CI);
 	if (!addr_phys[1]) {
-		dev_err(dev, "Can't get %s property 'reg::CI'\n",
-			node->full_name);
+		dev_err(dev, "Can't get %pOF property 'reg::CI'\n", node);
 		return -ENXIO;
 	}
 
@@ -120,21 +118,25 @@ static int bman_portal_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq <= 0) {
-		dev_err(dev, "Can't get %s IRQ'\n", node->full_name);
+		dev_err(dev, "Can't get %pOF IRQ'\n", node);
 		return -ENXIO;
 	}
 	pcfg->irq = irq;
 
 	va = ioremap_prot(addr_phys[0]->start, resource_size(addr_phys[0]), 0);
-	if (!va)
+	if (!va) {
+		dev_err(dev, "ioremap::CE failed\n");
 		goto err_ioremap1;
+	}
 
 	pcfg->addr_virt[DPAA_PORTAL_CE] = va;
 
 	va = ioremap_prot(addr_phys[1]->start, resource_size(addr_phys[1]),
 			  _PAGE_GUARDED | _PAGE_NO_CACHE);
-	if (!va)
+	if (!va) {
+		dev_err(dev, "ioremap::CI failed\n");
 		goto err_ioremap2;
+	}
 
 	pcfg->addr_virt[DPAA_PORTAL_CI] = va;
 
@@ -150,8 +152,10 @@ static int bman_portal_probe(struct platform_device *pdev)
 	spin_unlock(&bman_lock);
 	pcfg->cpu = cpu;
 
-	if (!init_pcfg(pcfg))
-		goto err_ioremap2;
+	if (!init_pcfg(pcfg)) {
+		dev_err(dev, "portal init failed\n");
+		goto err_portal_init;
+	}
 
 	/* clear irq affinity if assigned cpu is offline */
 	if (!cpu_online(cpu))
@@ -159,10 +163,11 @@ static int bman_portal_probe(struct platform_device *pdev)
 
 	return 0;
 
+err_portal_init:
+	iounmap(pcfg->addr_virt[DPAA_PORTAL_CI]);
 err_ioremap2:
 	iounmap(pcfg->addr_virt[DPAA_PORTAL_CE]);
 err_ioremap1:
-	dev_err(dev, "ioremap failed\n");
 	return -ENXIO;
 }
 

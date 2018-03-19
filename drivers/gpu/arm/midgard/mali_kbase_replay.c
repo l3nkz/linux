@@ -1,19 +1,24 @@
 /*
  *
- * (C) COPYRIGHT 2014-2016 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2017 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
  * of such GNU licence.
  *
- * A copy of the licence is included with the program, and can also be obtained
- * from Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
- * Boston, MA  02110-1301, USA.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, you can access it online at
+ * http://www.gnu.org/licenses/gpl-2.0.html.
+ *
+ * SPDX-License-Identifier: GPL-2.0
  *
  */
-
-
 
 /**
  * @file mali_kbase_replay.c
@@ -654,13 +659,13 @@ static void kbasep_replay_create_atom(struct kbase_context *kctx,
 				      base_jd_prio prio)
 {
 	atom->nr_extres = 0;
-	atom->extres_list.value = NULL;
+	atom->extres_list = 0;
 	atom->device_nr = 0;
 	atom->prio = prio;
 	atom->atom_number = atom_nr;
 
-	base_jd_atom_dep_set(&atom->pre_dep[0], 0 , BASE_JD_DEP_TYPE_INVALID);
-	base_jd_atom_dep_set(&atom->pre_dep[1], 0 , BASE_JD_DEP_TYPE_INVALID);
+	base_jd_atom_dep_set(&atom->pre_dep[0], 0, BASE_JD_DEP_TYPE_INVALID);
+	base_jd_atom_dep_set(&atom->pre_dep[1], 0, BASE_JD_DEP_TYPE_INVALID);
 
 	atom->udata.blob[0] = 0;
 	atom->udata.blob[1] = 0;
@@ -708,7 +713,8 @@ static int kbasep_replay_create_atoms(struct kbase_context *kctx,
 	kbasep_replay_create_atom(kctx, t_atom, t_atom_nr, prio);
 	kbasep_replay_create_atom(kctx, f_atom, f_atom_nr, prio);
 
-	base_jd_atom_dep_set(&f_atom->pre_dep[0], t_atom_nr , BASE_JD_DEP_TYPE_DATA);
+	base_jd_atom_dep_set(&f_atom->pre_dep[0], t_atom_nr,
+			     BASE_JD_DEP_TYPE_DATA);
 
 	return 0;
 }
@@ -771,22 +777,6 @@ static int kbasep_replay_parse_payload(struct kbase_context *kctx,
 		dev_err(kctx->kbdev->dev, "kbasep_replay_parse_payload: failed to map payload into kernel space\n");
 		return -EINVAL;
 	}
-
-#ifdef BASE_LEGACY_UK10_2_SUPPORT
-	if (KBASE_API_VERSION(10, 3) > replay_atom->kctx->api_version) {
-		base_jd_replay_payload_uk10_2 *payload_uk10_2;
-		u16 tiler_core_req;
-		u16 fragment_core_req;
-
-		payload_uk10_2 = (base_jd_replay_payload_uk10_2 *) payload;
-		memcpy(&tiler_core_req, &payload_uk10_2->tiler_core_req,
-				sizeof(tiler_core_req));
-		memcpy(&fragment_core_req, &payload_uk10_2->fragment_core_req,
-				sizeof(fragment_core_req));
-		payload->tiler_core_req = (u32)(tiler_core_req & 0x7fff);
-		payload->fragment_core_req = (u32)(fragment_core_req & 0x7fff);
-	}
-#endif /* BASE_LEGACY_UK10_2_SUPPORT */
 
 #ifdef CONFIG_MALI_DEBUG
 	dev_dbg(kctx->kbdev->dev, "kbasep_replay_parse_payload: payload=%p\n", payload);
@@ -1098,7 +1088,6 @@ static bool kbase_replay_fault_check(struct kbase_jd_atom *katom)
 bool kbase_replay_process(struct kbase_jd_atom *katom)
 {
 	struct kbase_context *kctx = katom->kctx;
-	struct kbase_jd_context *jctx = &kctx->jctx;
 	struct kbase_device *kbdev = kctx->kbdev;
 
 	/* Don't replay this atom if these issues are not present in the
@@ -1122,7 +1111,7 @@ bool kbase_replay_process(struct kbase_jd_atom *katom)
 		return false;
 	}
 
-	if (jctx->sched_info.ctx.is_dying) {
+	if (kbase_ctx_flag(kctx, KCTX_DYING)) {
 		dev_dbg(kbdev->dev, "Not replaying; context is dying\n");
 
 		if (katom->retry_count)

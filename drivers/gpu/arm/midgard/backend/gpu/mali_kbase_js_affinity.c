@@ -7,13 +7,18 @@
  * Foundation, and any use by you of this program is subject to the terms
  * of such GNU licence.
  *
- * A copy of the licence is included with the program, and can also be obtained
- * from Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
- * Boston, MA  02110-1301, USA.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, you can access it online at
+ * http://www.gnu.org/licenses/gpl-2.0.html.
+ *
+ * SPDX-License-Identifier: GPL-2.0
  *
  */
-
-
 
 
 
@@ -94,9 +99,8 @@ bool kbase_js_choose_affinity(u64 * const affinity,
 	base_jd_core_req core_req = katom->core_req;
 	unsigned int num_core_groups = kbdev->gpu_props.num_core_groups;
 	u64 core_availability_mask;
-	unsigned long flags;
 
-	spin_lock_irqsave(&kbdev->pm.power_change_lock, flags);
+	lockdep_assert_held(&kbdev->hwaccess_lock);
 
 	core_availability_mask = kbase_pm_ca_get_core_mask(kbdev);
 
@@ -105,7 +109,6 @@ bool kbase_js_choose_affinity(u64 * const affinity,
 	 * transitioning) then fail.
 	 */
 	if (0 == core_availability_mask) {
-		spin_unlock_irqrestore(&kbdev->pm.power_change_lock, flags);
 		*affinity = 0;
 		return false;
 	}
@@ -114,7 +117,6 @@ bool kbase_js_choose_affinity(u64 * const affinity,
 
 	if ((core_req & (BASE_JD_REQ_FS | BASE_JD_REQ_CS | BASE_JD_REQ_T)) ==
 								BASE_JD_REQ_T) {
-		spin_unlock_irqrestore(&kbdev->pm.power_change_lock, flags);
 		 /* If the hardware supports XAFFINITY then we'll only enable
 		  * the tiler (which is the default so this is a no-op),
 		  * otherwise enable shader core 0. */
@@ -168,8 +170,6 @@ bool kbase_js_choose_affinity(u64 * const affinity,
 					kbdev->pm.debug_core_mask[js];
 		}
 	}
-
-	spin_unlock_irqrestore(&kbdev->pm.power_change_lock, flags);
 
 	/*
 	 * If no cores are currently available in the desired core group(s)

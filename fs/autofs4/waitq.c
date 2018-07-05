@@ -19,9 +19,6 @@
  */
 static autofs_wqt_t autofs4_next_wait_queue = 1;
 
-/* These are the signals we allow interrupting a pending mount */
-#define SHUTDOWN_SIGS	(sigmask(SIGKILL) | sigmask(SIGINT) | sigmask(SIGQUIT))
-
 void autofs4_catatonic_mode(struct autofs_sb_info *sbi)
 {
 	struct autofs_wait_queue *wq, *nwq;
@@ -81,7 +78,8 @@ static int autofs4_write(struct autofs_sb_info *sbi,
 		spin_unlock_irqrestore(&current->sighand->siglock, flags);
 	}
 
-	return (bytes > 0);
+	/* if 'wr' returned 0 (impossible) we assume -EIO (safe) */
+	return bytes == 0 ? 0 : wr < 0 ? wr : -EIO;
 }
 
 static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
@@ -95,6 +93,7 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	} pkt;
 	struct file *pipe = NULL;
 	size_t pktsz;
+	int ret;
 
 	pr_debug("wait id = 0x%08lx, name = %.*s, type=%d\n",
 		 (unsigned long) wq->wait_queue_token,
@@ -168,8 +167,18 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 
 	mutex_unlock(&sbi->wq_mutex);
 
-	if (autofs4_write(sbi, pipe, &pkt, pktsz))
+	switch (ret = autofs4_write(sbi, pipe, &pkt, pktsz)) {
+	case 0:
+		break;
+	case -ENOMEM:
+	case -ERESTARTSYS:
+		/* Just fail this one */
+		autofs4_wait_release(sbi, wq->wait_queue_token, ret);
+		break;
+	default:
 		autofs4_catatonic_mode(sbi);
+		break;
+	}
 	fput(pipe);
 }
 
@@ -430,8 +439,8 @@ int autofs4_wait(struct autofs_sb_info *sbi,
 		memcpy(&wq->name, &qstr, sizeof(struct qstr));
 		wq->dev = autofs4_get_dev(sbi);
 		wq->ino = autofs4_get_ino(sbi);
-		wq->uid = current_cred()->uid;
-		wq->gid = current_cred()->gid;
+		wq->uid = current_uid();
+		wq->gid = current_gid();
 		wq->pid = pid;
 		wq->tgid = tgid;
 		wq->status = -EINTR; /* Status return if interrupted */
@@ -474,29 +483,7 @@ int autofs4_wait(struct autofs_sb_info *sbi,
 	 * wq->name.name is NULL iff the lock is already released
 	 * or the mount has been made catatonic.
 	 */
-	if (wq->name.name) {
-		/* Block all but "shutdown" signals while waiting */
-		unsigned long shutdown_sigs_mask;
-		unsigned long irqflags;
-		sigset_t oldset;
-
-		spin_lock_irqsave(&current->sighand->siglock, irqflags);
-		oldset = current->blocked;
-		shutdown_sigs_mask = SHUTDOWN_SIGS & ~oldset.sig[0];
-		siginitsetinv(&current->blocked, shutdown_sigs_mask);
-		recalc_sigpending();
-		spin_unlock_irqrestore(&current->sighand->siglock, irqflags);
-
-		wait_event_interruptible(wq->queue, wq->name.name == NULL);
-
-		spin_lock_irqsave(&current->sighand->siglock, irqflags);
-		current->blocked = oldset;
-		recalc_sigpending();
-		spin_unlock_irqrestore(&current->sighand->siglock, irqflags);
-	} else {
-		pr_debug("skipped sleeping\n");
-	}
-
+	wait_event_killable(wq->queue, wq->name.name == NULL);
 	status = wq->status;
 
 	/*
@@ -562,7 +549,7 @@ int autofs4_wait_release(struct autofs_sb_info *sbi, autofs_wqt_t wait_queue_tok
 	kfree(wq->name.name);
 	wq->name.name = NULL;	/* Do not wait on this queue */
 	wq->status = status;
-	wake_up_interruptible(&wq->queue);
+	wake_up(&wq->queue);
 	if (!--wq->wait_ctr)
 		kfree(wq);
 	mutex_unlock(&sbi->wq_mutex);

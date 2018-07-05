@@ -19,6 +19,11 @@
 #include <linux/posix-timers.h>
 #include <linux/compat.h>
 
+#ifdef CONFIG_ARCH_HAS_SYSCALL_WRAPPER
+/* Architectures may override SYS_NI and COMPAT_SYS_NI */
+#include <asm/syscall_wrapper.h>
+#endif
+
 asmlinkage long sys_ni_posix_timers(void)
 {
 	pr_err_once("process %d (%s) attempted a POSIX timer syscall "
@@ -27,8 +32,13 @@ asmlinkage long sys_ni_posix_timers(void)
 	return -ENOSYS;
 }
 
+#ifndef SYS_NI
 #define SYS_NI(name)  SYSCALL_ALIAS(sys_##name, sys_ni_posix_timers)
+#endif
+
+#ifndef COMPAT_SYS_NI
 #define COMPAT_SYS_NI(name)  SYSCALL_ALIAS(compat_sys_##name, sys_ni_posix_timers)
+#endif
 
 SYS_NI(timer_create);
 SYS_NI(timer_gettime);
@@ -117,8 +127,7 @@ SYSCALL_DEFINE4(clock_nanosleep, const clockid_t, which_clock, int, flags,
 		const struct timespec __user *, rqtp,
 		struct timespec __user *, rmtp)
 {
-	struct timespec64 t64;
-	struct timespec t;
+	struct timespec64 t;
 
 	switch (which_clock) {
 	case CLOCK_REALTIME:
@@ -129,16 +138,15 @@ SYSCALL_DEFINE4(clock_nanosleep, const clockid_t, which_clock, int, flags,
 		return -EINVAL;
 	}
 
-	if (copy_from_user(&t, rqtp, sizeof (struct timespec)))
+	if (get_timespec64(&t, rqtp))
 		return -EFAULT;
-	t64 = timespec_to_timespec64(t);
-	if (!timespec64_valid(&t64))
+	if (!timespec64_valid(&t))
 		return -EINVAL;
 	if (flags & TIMER_ABSTIME)
 		rmtp = NULL;
 	current->restart_block.nanosleep.type = rmtp ? TT_NATIVE : TT_NONE;
 	current->restart_block.nanosleep.rmtp = rmtp;
-	return hrtimer_nanosleep(&t64, flags & TIMER_ABSTIME ?
+	return hrtimer_nanosleep(&t, flags & TIMER_ABSTIME ?
 				 HRTIMER_MODE_ABS : HRTIMER_MODE_REL,
 				 which_clock);
 }
@@ -203,8 +211,7 @@ COMPAT_SYSCALL_DEFINE4(clock_nanosleep, clockid_t, which_clock, int, flags,
 		       struct compat_timespec __user *, rqtp,
 		       struct compat_timespec __user *, rmtp)
 {
-	struct timespec64 t64;
-	struct timespec t;
+	struct timespec64 t;
 
 	switch (which_clock) {
 	case CLOCK_REALTIME:
@@ -215,16 +222,15 @@ COMPAT_SYSCALL_DEFINE4(clock_nanosleep, clockid_t, which_clock, int, flags,
 		return -EINVAL;
 	}
 
-	if (compat_get_timespec(&t, rqtp))
+	if (compat_get_timespec64(&t, rqtp))
 		return -EFAULT;
-	t64 = timespec_to_timespec64(t);
-	if (!timespec64_valid(&t64))
+	if (!timespec64_valid(&t))
 		return -EINVAL;
 	if (flags & TIMER_ABSTIME)
 		rmtp = NULL;
 	current->restart_block.nanosleep.type = rmtp ? TT_COMPAT : TT_NONE;
 	current->restart_block.nanosleep.compat_rmtp = rmtp;
-	return hrtimer_nanosleep(&t64, flags & TIMER_ABSTIME ?
+	return hrtimer_nanosleep(&t, flags & TIMER_ABSTIME ?
 				 HRTIMER_MODE_ABS : HRTIMER_MODE_REL,
 				 which_clock);
 }

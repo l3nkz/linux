@@ -13,7 +13,7 @@
  * more details.
  */
 #else
-/**
+/*
 Support for Intel Camera Imaging ISP subsystem.
 Copyright (c) 2010 - 2015, Intel Corporation.
 
@@ -166,7 +166,7 @@ static int32_t calculate_stride(
 	bool	raw_packed,
 	int32_t	align_in_bytes);
 
-/** end of Forwarded Declaration */
+/* end of Forwarded Declaration */
 
 /**************************************************
  *
@@ -292,7 +292,7 @@ ia_css_isys_error_t ia_css_isys_stream_calculate_cfg(
 	return rc;
 }
 
-/** end of Public Methods */
+/* end of Public Methods */
 
 /**************************************************
  *
@@ -331,7 +331,7 @@ static bool create_input_system_channel(
 		break;
 	}
 
-	if (rc == false)
+	if (!rc)
 		return false;
 
 	if (!acquire_sid(me->stream2mmio_id, &(me->stream2mmio_sid_id))) {
@@ -474,7 +474,7 @@ static bool calculate_input_system_channel_cfg(
 
 	rc = calculate_stream2mmio_cfg(isys_cfg, metadata,
 			&(channel_cfg->stream2mmio_cfg));
-	if (rc == false)
+	if (!rc)
 		return false;
 
 	rc = calculate_ibuf_ctrl_cfg(
@@ -482,7 +482,7 @@ static bool calculate_input_system_channel_cfg(
 			input_port,
 			isys_cfg,
 			&(channel_cfg->ibuf_ctrl_cfg));
-	if (rc == false)
+	if (!rc)
 		return false;
 	if (metadata)
 		channel_cfg->ibuf_ctrl_cfg.stores_per_frame = isys_cfg->metadata.lines_per_frame;
@@ -491,7 +491,7 @@ static bool calculate_input_system_channel_cfg(
 			channel,
 			isys_cfg,
 			&(channel_cfg->dma_cfg));
-	if (rc == false)
+	if (!rc)
 		return false;
 
 	rc = calculate_isys2401_dma_port_cfg(
@@ -499,7 +499,7 @@ static bool calculate_input_system_channel_cfg(
 			false,
 			metadata,
 			&(channel_cfg->dma_src_port_cfg));
-	if (rc == false)
+	if (!rc)
 		return false;
 
 	rc = calculate_isys2401_dma_port_cfg(
@@ -507,7 +507,7 @@ static bool calculate_input_system_channel_cfg(
 			isys_cfg->raw_packed,
 			metadata,
 			&(channel_cfg->dma_dest_port_cfg));
-	if (rc == false)
+	if (!rc)
 		return false;
 
 	return true;
@@ -894,5 +894,5 @@ static csi_mipi_packet_type_t get_csi_mipi_packet_type(
 
 	return packet_type;
 }
-/** end of Private Methods */
+/* end of Private Methods */
 #endif

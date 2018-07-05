@@ -71,7 +71,7 @@
 struct sh_css_sp_group		sh_css_sp_group;
 struct sh_css_sp_stage		sh_css_sp_stage;
 struct sh_css_isp_stage		sh_css_isp_stage;
-struct sh_css_sp_output		sh_css_sp_output;
+static struct sh_css_sp_output		sh_css_sp_output;
 static struct sh_css_sp_per_frame_data per_frame_data;
 
 /* true if SP supports frame loop and host2sp_commands */
@@ -117,9 +117,9 @@ copy_isp_stage_to_sp_stage(void)
 	*/
 	sh_css_sp_stage.enable.sdis = sh_css_isp_stage.binary_info.enable.dis;
 	sh_css_sp_stage.enable.s3a = sh_css_isp_stage.binary_info.enable.s3a;
-#ifdef ISP2401	
+#ifdef ISP2401
 	sh_css_sp_stage.enable.lace_stats = sh_css_isp_stage.binary_info.enable.lace_stats;
-#endif	
+#endif
 }
 
 void
@@ -261,7 +261,7 @@ sh_css_sp_start_raw_copy(struct ia_css_frame *out_frame,
 	assert(out_frame != NULL);
 
 	{
-		/**
+		/*
 		 * Clear sh_css_sp_stage for easy debugging.
 		 * program_input_circuit must be saved as it is set outside
 		 * this function.
@@ -335,7 +335,7 @@ sh_css_sp_start_isys_copy(struct ia_css_frame *out_frame,
 	assert(out_frame != NULL);
 
 	{
-		/**
+		/*
 		 * Clear sh_css_sp_stage for easy debugging.
 		 * program_input_circuit must be saved as it is set outside
 		 * this function.
@@ -754,7 +754,7 @@ sh_css_sp_write_frame_pointers(const struct sh_css_binary_args *args)
 
 static void
 sh_css_sp_init_group(bool two_ppc,
-		     enum ia_css_stream_format input_format,
+		     enum atomisp_input_format input_format,
 		     bool no_isp_sync,
 		     uint8_t if_config_index)
 {
@@ -817,7 +817,6 @@ configure_isp_from_args(
 	bool two_ppc,
 	bool deinterleaved)
 {
-	enum ia_css_err err = IA_CSS_SUCCESS;
 #ifdef ISP2401
 	struct ia_css_pipe *pipe = find_pipe_by_num(pipeline->pipe_num);
 	const struct ia_css_resolution *res;
@@ -841,7 +840,7 @@ configure_isp_from_args(
 	ia_css_ref_configure(binary, (const struct ia_css_frame **)args->delay_frames, pipeline->dvs_frame_delay);
 	ia_css_tnr_configure(binary, (const struct ia_css_frame **)args->tnr_frames);
 	ia_css_bayer_io_config(binary, args);
-	return err;
+	return IA_CSS_SUCCESS;
 }
 
 static void
@@ -909,7 +908,7 @@ sh_css_sp_init_stage(struct ia_css_binary *binary,
 	xinfo = binary->info;
 	info  = &xinfo->sp;
 	{
-		/**
+		/*
 		 * Clear sh_css_sp_stage for easy debugging.
 		 * program_input_circuit must be saved as it is set outside
 		 * this function.
@@ -980,7 +979,7 @@ sh_css_sp_init_stage(struct ia_css_binary *binary,
 	sh_css_isp_stage.binary_name[SH_CSS_MAX_BINARY_NAME - 1] = 0;
 	sh_css_isp_stage.mem_initializers = *isp_mem_if;
 
-	/**
+	/*
 	 * Even when a stage does not need uds and does not params,
 	 * ia_css_uds_sp_scale_params() seems to be called (needs
 	 * further investigation). This function can not deal with
@@ -1118,7 +1117,7 @@ sp_init_stage(struct ia_css_pipeline_stage *stage,
 			out_infos[0] = &args->out_frame[0]->info;
 		info = &firmware->info.isp;
 		ia_css_binary_fill_info(info, false, false,
-			    IA_CSS_STREAM_FORMAT_RAW_10,
+			    ATOMISP_INPUT_FORMAT_RAW_10,
 			    args->in_frame  ? &args->in_frame->info  : NULL,
 			    NULL,
 				out_infos,
@@ -1197,7 +1196,7 @@ sh_css_sp_init_pipeline(struct ia_css_pipeline *me,
 			const struct ia_css_metadata_config *md_config,
 			const struct ia_css_metadata_info *md_info,
 #if !defined(HAS_NO_INPUT_SYSTEM)
-			const mipi_port_ID_t port_id
+			const enum mipi_port_id port_id
 #endif
 #ifdef ISP2401
 			,
@@ -1429,7 +1428,7 @@ sh_css_init_host2sp_frame_data(void)
 }
 
 
-/**
+/*
  * @brief Update the offline frame information in host_sp_communication.
  * Refer to "sh_css_sp.h" for more details.
  */
@@ -1441,8 +1440,6 @@ sh_css_update_host2sp_offline_frame(
 {
 	unsigned int HIVE_ADDR_host_sp_com;
 	unsigned int offset;
-
-	(void)HIVE_ADDR_host_sp_com; /* Suppres warnings in CRUN */
 
 	assert(frame_num < NUM_CONTINUOUS_FRAMES);
 
@@ -1461,7 +1458,7 @@ sh_css_update_host2sp_offline_frame(
 }
 
 #if defined(USE_INPUT_SYSTEM_VERSION_2) || defined(USE_INPUT_SYSTEM_VERSION_2401)
-/**
+/*
  * @brief Update the mipi frame information in host_sp_communication.
  * Refer to "sh_css_sp.h" for more details.
  */
@@ -1472,8 +1469,6 @@ sh_css_update_host2sp_mipi_frame(
 {
 	unsigned int HIVE_ADDR_host_sp_com;
 	unsigned int offset;
-
-	(void)HIVE_ADDR_host_sp_com; /* Suppres warnings in CRUN */
 
 	/* MIPI buffers are dedicated to port, so now there are more of them. */
 	assert(frame_num < (N_CSI_PORTS * NUM_MIPI_FRAMES_PER_STREAM));
@@ -1488,7 +1483,7 @@ sh_css_update_host2sp_mipi_frame(
 				frame ? frame->data : 0);
 }
 
-/**
+/*
  * @brief Update the mipi metadata information in host_sp_communication.
  * Refer to "sh_css_sp.h" for more details.
  */
@@ -1499,8 +1494,6 @@ sh_css_update_host2sp_mipi_metadata(
 {
 	unsigned int HIVE_ADDR_host_sp_com;
 	unsigned int o;
-
-	(void)HIVE_ADDR_host_sp_com; /* Suppres warnings in CRUN */
 
 	/* MIPI buffers are dedicated to port, so now there are more of them. */
 	assert(frame_num < (N_CSI_PORTS * NUM_MIPI_FRAMES_PER_STREAM));
@@ -1520,8 +1513,6 @@ sh_css_update_host2sp_num_mipi_frames(unsigned num_frames)
 	unsigned int HIVE_ADDR_host_sp_com;
 	unsigned int offset;
 
-	(void)HIVE_ADDR_host_sp_com; /* Suppres warnings in CRUN */
-
 	/* Write new frame data into SP DMEM */
 	HIVE_ADDR_host_sp_com = sh_css_sp_fw.info.sp.host_sp_com;
 	offset = (unsigned int)offsetof(struct host_sp_communication, host2sp_num_mipi_frames)
@@ -1538,8 +1529,6 @@ sh_css_update_host2sp_cont_num_raw_frames(unsigned num_frames, bool set_avail)
 	unsigned int HIVE_ADDR_host_sp_com;
 	unsigned int extra_num_frames, avail_num_frames;
 	unsigned int offset, offset_extra;
-
-	(void)HIVE_ADDR_host_sp_com; /* Suppres warnings in CRUN */
 
 	/* Write new frame data into SP DMEM */
 	fw = &sh_css_sp_fw;
@@ -1735,7 +1724,7 @@ ia_css_isp_has_started(void)
 }
 
 
-/**
+/*
  * @brief Initialize the DMA software-mask in the debug mode.
  * Refer to "sh_css_sp.h" for more details.
  */
@@ -1761,7 +1750,7 @@ sh_css_sp_init_dma_sw_reg(int dma_id)
 	return true;
 }
 
-/**
+/*
  * @brief Set the DMA software-mask in the debug mode.
  * Refer to "sh_css_sp.h" for more details.
  */

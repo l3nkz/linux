@@ -13,7 +13,7 @@
  * more details.
  */
 #else
-/**
+/*
 Support for Intel Camera Imaging ISP subsystem.
 Copyright (c) 2010 - 2015, Intel Corporation.
 
@@ -86,7 +86,7 @@ static unsigned int inputfifo_curr_ch_id, inputfifo_curr_fmt_type;
 #endif
 struct inputfifo_instance {
 	unsigned int				ch_id;
-	enum ia_css_stream_format	input_format;
+	enum atomisp_input_format	input_format;
 	bool						two_ppc;
 	bool						streaming;
 	unsigned int				hblank_cycles;
@@ -105,7 +105,7 @@ static struct inputfifo_instance
 
 /* Streaming to MIPI */
 static unsigned inputfifo_wrap_marker(
-/* STORAGE_CLASS_INLINE unsigned inputfifo_wrap_marker( */
+/* static inline unsigned inputfifo_wrap_marker( */
 	unsigned marker)
 {
 	return marker |
@@ -113,7 +113,7 @@ static unsigned inputfifo_wrap_marker(
 	(inputfifo_curr_fmt_type << _HIVE_STR_TO_MIPI_FMT_TYPE_LSB);
 }
 
-STORAGE_CLASS_INLINE void
+static inline void
 _sh_css_fifo_snd(unsigned token)
 {
 	while (!can_event_send_token(STR2MIPI_EVENT_ID))
@@ -123,7 +123,7 @@ _sh_css_fifo_snd(unsigned token)
 }
 
 static void inputfifo_send_data_a(
-/* STORAGE_CLASS_INLINE void inputfifo_send_data_a( */
+/* static inline void inputfifo_send_data_a( */
 unsigned int data)
 {
 	unsigned int token = (1 << HIVE_STR_TO_MIPI_VALID_A_BIT) |
@@ -135,7 +135,7 @@ unsigned int data)
 
 
 static void inputfifo_send_data_b(
-/* STORAGE_CLASS_INLINE void inputfifo_send_data_b( */
+/* static inline void inputfifo_send_data_b( */
 	unsigned int data)
 {
 	unsigned int token = (1 << HIVE_STR_TO_MIPI_VALID_B_BIT) |
@@ -147,7 +147,7 @@ static void inputfifo_send_data_b(
 
 
 static void inputfifo_send_data(
-/* STORAGE_CLASS_INLINE void inputfifo_send_data( */
+/* static inline void inputfifo_send_data( */
 	unsigned int a,
 	unsigned int b)
 {
@@ -162,7 +162,7 @@ static void inputfifo_send_data(
 
 
 static void inputfifo_send_sol(void)
-/* STORAGE_CLASS_INLINE void inputfifo_send_sol(void) */
+/* static inline void inputfifo_send_sol(void) */
 {
 	hrt_data	token = inputfifo_wrap_marker(
 		1 << HIVE_STR_TO_MIPI_SOL_BIT);
@@ -174,7 +174,7 @@ static void inputfifo_send_sol(void)
 
 
 static void inputfifo_send_eol(void)
-/* STORAGE_CLASS_INLINE void inputfifo_send_eol(void) */
+/* static inline void inputfifo_send_eol(void) */
 {
 	hrt_data	token = inputfifo_wrap_marker(
 		1 << HIVE_STR_TO_MIPI_EOL_BIT);
@@ -185,7 +185,7 @@ static void inputfifo_send_eol(void)
 
 
 static void inputfifo_send_sof(void)
-/* STORAGE_CLASS_INLINE void inputfifo_send_sof(void) */
+/* static inline void inputfifo_send_sof(void) */
 {
 	hrt_data	token = inputfifo_wrap_marker(
 		1 << HIVE_STR_TO_MIPI_SOF_BIT);
@@ -197,7 +197,7 @@ static void inputfifo_send_sof(void)
 
 
 static void inputfifo_send_eof(void)
-/* STORAGE_CLASS_INLINE void inputfifo_send_eof(void) */
+/* static inline void inputfifo_send_eof(void) */
 {
 	hrt_data	token = inputfifo_wrap_marker(
 		1 << HIVE_STR_TO_MIPI_EOF_BIT);
@@ -209,7 +209,7 @@ static void inputfifo_send_eof(void)
 
 #ifdef __ON__
 static void inputfifo_send_ch_id(
-/* STORAGE_CLASS_INLINE void inputfifo_send_ch_id( */
+/* static inline void inputfifo_send_ch_id( */
 	unsigned int ch_id)
 {
 	hrt_data	token;
@@ -223,7 +223,7 @@ static void inputfifo_send_ch_id(
 }
 
 static void inputfifo_send_fmt_type(
-/* STORAGE_CLASS_INLINE void inputfifo_send_fmt_type( */
+/* static inline void inputfifo_send_fmt_type( */
 	unsigned int fmt_type)
 {
 	hrt_data	token;
@@ -240,7 +240,7 @@ static void inputfifo_send_fmt_type(
 
 
 static void inputfifo_send_ch_id_and_fmt_type(
-/* STORAGE_CLASS_INLINE
+/* static inline
 void inputfifo_send_ch_id_and_fmt_type( */
 	unsigned int ch_id,
 	unsigned int fmt_type)
@@ -259,7 +259,7 @@ void inputfifo_send_ch_id_and_fmt_type( */
 
 
 static void inputfifo_send_empty_token(void)
-/* STORAGE_CLASS_INLINE void inputfifo_send_empty_token(void) */
+/* static inline void inputfifo_send_empty_token(void) */
 {
 	hrt_data	token = inputfifo_wrap_marker(0);
 	_sh_css_fifo_snd(token);
@@ -269,7 +269,7 @@ static void inputfifo_send_empty_token(void)
 
 
 static void inputfifo_start_frame(
-/* STORAGE_CLASS_INLINE void inputfifo_start_frame( */
+/* static inline void inputfifo_start_frame( */
 	unsigned int ch_id,
 	unsigned int fmt_type)
 {
@@ -466,21 +466,21 @@ static void inputfifo_send_frame(
 
 
 static enum inputfifo_mipi_data_type inputfifo_determine_type(
-	enum ia_css_stream_format input_format)
+	enum atomisp_input_format input_format)
 {
 	enum inputfifo_mipi_data_type type;
 
 	type = inputfifo_mipi_data_type_regular;
-	if (input_format == IA_CSS_STREAM_FORMAT_YUV420_8_LEGACY) {
+	if (input_format == ATOMISP_INPUT_FORMAT_YUV420_8_LEGACY) {
 		type =
 			inputfifo_mipi_data_type_yuv420_legacy;
-	} else if (input_format == IA_CSS_STREAM_FORMAT_YUV420_8  ||
-		   input_format == IA_CSS_STREAM_FORMAT_YUV420_10 ||
-		   input_format == IA_CSS_STREAM_FORMAT_YUV420_16) {
+	} else if (input_format == ATOMISP_INPUT_FORMAT_YUV420_8  ||
+		   input_format == ATOMISP_INPUT_FORMAT_YUV420_10 ||
+		   input_format == ATOMISP_INPUT_FORMAT_YUV420_16) {
 		type =
 			inputfifo_mipi_data_type_yuv420;
-	} else if (input_format >= IA_CSS_STREAM_FORMAT_RGB_444 &&
-		   input_format <= IA_CSS_STREAM_FORMAT_RGB_888) {
+	} else if (input_format >= ATOMISP_INPUT_FORMAT_RGB_444 &&
+		   input_format <= ATOMISP_INPUT_FORMAT_RGB_888) {
 		type =
 			inputfifo_mipi_data_type_rgb;
 	}
@@ -500,7 +500,7 @@ void ia_css_inputfifo_send_input_frame(
 	unsigned int width,
 	unsigned int height,
 	unsigned int ch_id,
-	enum ia_css_stream_format input_format,
+	enum atomisp_input_format input_format,
 	bool two_ppc)
 {
 	unsigned int fmt_type, hblank_cycles, marker_cycles;
@@ -524,7 +524,7 @@ void ia_css_inputfifo_send_input_frame(
 
 void ia_css_inputfifo_start_frame(
 	unsigned int ch_id,
-	enum ia_css_stream_format input_format,
+	enum atomisp_input_format input_format,
 	bool two_ppc)
 {
 	struct inputfifo_instance *s2mi;
@@ -574,7 +574,7 @@ void ia_css_inputfifo_send_line(
 
 void ia_css_inputfifo_send_embedded_line(
 	unsigned int	ch_id,
-	enum ia_css_stream_format	data_type,
+	enum atomisp_input_format	data_type,
 	const unsigned short	*data,
 	unsigned int	width)
 {

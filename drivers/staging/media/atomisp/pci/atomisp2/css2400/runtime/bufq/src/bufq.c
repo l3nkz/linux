@@ -90,12 +90,11 @@ struct sh_css_queues {
 
 #endif
 
-struct sh_css_queues  css_queues;
-
-
 /*******************************************************
 *** Static variables
 ********************************************************/
+static struct sh_css_queues css_queues;
+
 static int buffer_type_to_queue_id_map[SH_CSS_MAX_SP_THREADS][IA_CSS_NUM_DYNAMIC_BUFFER_TYPE];
 static bool queue_availability[SH_CSS_MAX_SP_THREADS][SH_CSS_MAX_NUM_QUEUES];
 
@@ -152,7 +151,7 @@ void ia_css_queue_map(
 		unmap_buffer_type_to_queue_id(thread_id, buf_type);
 }
 
-/**
+/*
  * @brief Query the internal queue ID.
  */
 bool ia_css_query_internal_queue_id(
@@ -207,7 +206,7 @@ static void map_buffer_type_to_queue_id(
 	}
 
 	for (i = SH_CSS_QUEUE_C_ID; i < SH_CSS_MAX_NUM_QUEUES; i++) {
-		if (queue_availability[thread_id][i] == true) {
+		if (queue_availability[thread_id][i]) {
 			queue_availability[thread_id][i] = false;
 			buffer_type_to_queue_id_map[thread_id][buf_type] = i;
 			break;
@@ -266,7 +265,7 @@ static ia_css_queue_t *bufq_get_qhandle(
 	case sh_css_sp2host_isys_event_queue:
 		q = &css_queues.sp2host_isys_event_queue_handle;
 		break;
-#endif		
+#endif
 	case sh_css_host2sp_tag_cmd_queue:
 		q = &css_queues.host2sp_tag_cmd_queue_handle;
 		break;
@@ -280,7 +279,7 @@ static ia_css_queue_t *bufq_get_qhandle(
 /* Local function to initialize a buffer queue. This reduces
  * the chances of copy-paste errors or typos.
  */
-STORAGE_CLASS_INLINE void
+static inline void
 init_bufq(unsigned int desc_offset,
 	  unsigned int elems_offset,
 	  ia_css_queue_t *handle)

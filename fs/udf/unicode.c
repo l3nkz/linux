@@ -28,6 +28,9 @@
 
 #include "udf_sb.h"
 
+#define SURROGATE_MASK 0xfffff800
+#define SURROGATE_PAIR 0x0000d800
+
 static int udf_uni2char_utf8(wchar_t uni,
 			     unsigned char *out,
 			     int boundlen)
@@ -36,6 +39,9 @@ static int udf_uni2char_utf8(wchar_t uni,
 
 	if (boundlen <= 0)
 		return -ENAMETOOLONG;
+
+	if ((uni & SURROGATE_MASK) == SURROGATE_PAIR)
+		return -EINVAL;
 
 	if (uni < 0x80) {
 		out[u_len++] = (unsigned char)uni;
@@ -200,7 +206,7 @@ static int udf_name_from_CS0(uint8_t *str_o, int str_max_len,
 	cmp_id = ocu[0];
 	if (cmp_id != 8 && cmp_id != 16) {
 		memset(str_o, 0, str_max_len);
-		pr_err("unknown compression code (%d)\n", cmp_id);
+		pr_err("unknown compression code (%u)\n", cmp_id);
 		return -EINVAL;
 	}
 	u_ch = cmp_id >> 3;

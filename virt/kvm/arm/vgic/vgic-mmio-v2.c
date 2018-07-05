@@ -14,6 +14,8 @@
 #include <linux/irqchip/arm-gic.h>
 #include <linux/kvm.h>
 #include <linux/kvm_host.h>
+#include <linux/nospec.h>
+
 #include <kvm/iodev.h>
 #include <kvm/arm_vgic.h>
 
@@ -74,6 +76,7 @@ static void vgic_mmio_write_sgir(struct kvm_vcpu *source_vcpu,
 	int mode = (val >> 24) & 0x03;
 	int c;
 	struct kvm_vcpu *vcpu;
+	unsigned long flags;
 
 	switch (mode) {
 	case 0x0:		/* as specified by targets */
@@ -97,11 +100,11 @@ static void vgic_mmio_write_sgir(struct kvm_vcpu *source_vcpu,
 
 		irq = vgic_get_irq(source_vcpu->kvm, vcpu, intid);
 
-		spin_lock(&irq->irq_lock);
+		spin_lock_irqsave(&irq->irq_lock, flags);
 		irq->pending_latch = true;
 		irq->source |= 1U << source_vcpu->vcpu_id;
 
-		vgic_queue_irq_unlock(source_vcpu->kvm, irq);
+		vgic_queue_irq_unlock(source_vcpu->kvm, irq, flags);
 		vgic_put_irq(source_vcpu->kvm, irq);
 	}
 }
@@ -131,6 +134,7 @@ static void vgic_mmio_write_target(struct kvm_vcpu *vcpu,
 	u32 intid = VGIC_ADDR_TO_INTID(addr, 8);
 	u8 cpu_mask = GENMASK(atomic_read(&vcpu->kvm->online_vcpus) - 1, 0);
 	int i;
+	unsigned long flags;
 
 	/* GICD_ITARGETSR[0-7] are read-only */
 	if (intid < VGIC_NR_PRIVATE_IRQS)
@@ -140,13 +144,13 @@ static void vgic_mmio_write_target(struct kvm_vcpu *vcpu,
 		struct vgic_irq *irq = vgic_get_irq(vcpu->kvm, NULL, intid + i);
 		int target;
 
-		spin_lock(&irq->irq_lock);
+		spin_lock_irqsave(&irq->irq_lock, flags);
 
 		irq->targets = (val >> (i * 8)) & cpu_mask;
 		target = irq->targets ? __ffs(irq->targets) : 0;
 		irq->target_vcpu = kvm_get_vcpu(vcpu->kvm, target);
 
-		spin_unlock(&irq->irq_lock);
+		spin_unlock_irqrestore(&irq->irq_lock, flags);
 		vgic_put_irq(vcpu->kvm, irq);
 	}
 }
@@ -174,17 +178,18 @@ static void vgic_mmio_write_sgipendc(struct kvm_vcpu *vcpu,
 {
 	u32 intid = addr & 0x0f;
 	int i;
+	unsigned long flags;
 
 	for (i = 0; i < len; i++) {
 		struct vgic_irq *irq = vgic_get_irq(vcpu->kvm, vcpu, intid + i);
 
-		spin_lock(&irq->irq_lock);
+		spin_lock_irqsave(&irq->irq_lock, flags);
 
 		irq->source &= ~((val >> (i * 8)) & 0xff);
 		if (!irq->source)
 			irq->pending_latch = false;
 
-		spin_unlock(&irq->irq_lock);
+		spin_unlock_irqrestore(&irq->irq_lock, flags);
 		vgic_put_irq(vcpu->kvm, irq);
 	}
 }
@@ -195,19 +200,20 @@ static void vgic_mmio_write_sgipends(struct kvm_vcpu *vcpu,
 {
 	u32 intid = addr & 0x0f;
 	int i;
+	unsigned long flags;
 
 	for (i = 0; i < len; i++) {
 		struct vgic_irq *irq = vgic_get_irq(vcpu->kvm, vcpu, intid + i);
 
-		spin_lock(&irq->irq_lock);
+		spin_lock_irqsave(&irq->irq_lock, flags);
 
 		irq->source |= (val >> (i * 8)) & 0xff;
 
 		if (irq->source) {
 			irq->pending_latch = true;
-			vgic_queue_irq_unlock(vcpu->kvm, irq);
+			vgic_queue_irq_unlock(vcpu->kvm, irq, flags);
 		} else {
-			spin_unlock(&irq->irq_lock);
+			spin_unlock_irqrestore(&irq->irq_lock, flags);
 		}
 		vgic_put_irq(vcpu->kvm, irq);
 	}
@@ -320,6 +326,9 @@ static unsigned long vgic_mmio_read_apr(struct kvm_vcpu *vcpu,
 
 		if (n > vgic_v3_max_apr_idx(vcpu))
 			return 0;
+
+		n = array_index_nospec(n, 4);
+
 		/* GICv3 only uses ICH_AP1Rn for memory mapped (GICv2) guests */
 		return vgicv3->vgic_ap1r[n];
 	}

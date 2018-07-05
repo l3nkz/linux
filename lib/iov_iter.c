@@ -1012,7 +1012,7 @@ unsigned long iov_iter_gap_alignment(const struct iov_iter *i)
 }
 EXPORT_SYMBOL(iov_iter_gap_alignment);
 
-static inline size_t __pipe_get_pages(struct iov_iter *i,
+static inline ssize_t __pipe_get_pages(struct iov_iter *i,
 				size_t maxsize,
 				struct page **pages,
 				int idx,
@@ -1102,7 +1102,7 @@ static ssize_t pipe_get_pages_alloc(struct iov_iter *i,
 		   size_t *start)
 {
 	struct page **p;
-	size_t n;
+	ssize_t n;
 	int idx;
 	int npages;
 
@@ -1446,3 +1446,25 @@ int import_single_range(int rw, void __user *buf, size_t len,
 	return 0;
 }
 EXPORT_SYMBOL(import_single_range);
+
+int iov_iter_for_each_range(struct iov_iter *i, size_t bytes,
+			    int (*f)(struct kvec *vec, void *context),
+			    void *context)
+{
+	struct kvec w;
+	int err = -EINVAL;
+	if (!bytes)
+		return 0;
+
+	iterate_all_kinds(i, bytes, v, -EINVAL, ({
+		w.iov_base = kmap(v.bv_page) + v.bv_offset;
+		w.iov_len = v.bv_len;
+		err = f(&w, context);
+		kunmap(v.bv_page);
+		err;}), ({
+		w = v;
+		err = f(&w, context);})
+	)
+	return err;
+}
+EXPORT_SYMBOL(iov_iter_for_each_range);

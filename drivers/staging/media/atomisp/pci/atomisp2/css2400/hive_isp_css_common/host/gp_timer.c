@@ -21,7 +21,7 @@
 #endif /* __INLINE_GP_TIMER__ */
 #include "system_local.h"
 
-/** FIXME: not sure if reg_load(), reg_store() should be API.
+/* FIXME: not sure if reg_load(), reg_store() should be API.
  */
 static uint32_t
 gp_timer_reg_load(uint32_t reg);
@@ -29,7 +29,7 @@ gp_timer_reg_load(uint32_t reg);
 static void
 gp_timer_reg_store(uint32_t reg, uint32_t value);
 
-uint32_t
+static uint32_t
 gp_timer_reg_load(uint32_t reg)
 {
 	return ia_css_device_load_uint32(

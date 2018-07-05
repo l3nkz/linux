@@ -29,7 +29,7 @@
 #define ZERO (0x0)
 #define ONE  (1U)
 
-const ib_buffer_t   IB_BUFFER_NULL = {0 ,0, 0 };
+static const ib_buffer_t   IB_BUFFER_NULL = {0 ,0, 0 };
 
 static input_system_error_t input_system_configure_channel(
 	const channel_cfg_t		channel);
@@ -81,27 +81,27 @@ static input_system_error_t input_system_multiplexer_cfg(
 
 
 
-STORAGE_CLASS_INLINE void capture_unit_get_state(
+static inline void capture_unit_get_state(
 	const input_system_ID_t			ID,
 	const sub_system_ID_t			sub_id,
 	capture_unit_state_t			*state);
 
-STORAGE_CLASS_INLINE void acquisition_unit_get_state(
+static inline void acquisition_unit_get_state(
 	const input_system_ID_t			ID,
 	const sub_system_ID_t			sub_id,
 	acquisition_unit_state_t		*state);
 
-STORAGE_CLASS_INLINE void ctrl_unit_get_state(
+static inline void ctrl_unit_get_state(
 	const input_system_ID_t			ID,
 	const sub_system_ID_t			sub_id,
 	ctrl_unit_state_t				*state);
 
-STORAGE_CLASS_INLINE void mipi_port_get_state(
+static inline void mipi_port_get_state(
 	const rx_ID_t					ID,
-	const mipi_port_ID_t			port_ID,
+	const enum mipi_port_id			port_ID,
 	mipi_port_state_t				*state);
 
-STORAGE_CLASS_INLINE void rx_channel_get_state(
+static inline void rx_channel_get_state(
 	const rx_ID_t					ID,
 	const unsigned int				ch_id,
 	rx_channel_state_t				*state);
@@ -173,14 +173,14 @@ void input_system_get_state(
 			&(state->ctrl_unit_state[sub_id - CTRL_UNIT0_ID]));
 	}
 
-return;
+	return;
 }
 
 void receiver_get_state(
 	const rx_ID_t				ID,
 	receiver_state_t			*state)
 {
-	mipi_port_ID_t	port_id;
+	enum mipi_port_id	port_id;
 	unsigned int	ch_id;
 
 	assert(ID < N_RX_ID);
@@ -209,7 +209,7 @@ void receiver_get_state(
 	state->raw16 = (uint16_t)receiver_reg_load(ID,
 		_HRT_CSS_RECEIVER_RAW16_REG_IDX);
 
-	for (port_id = (mipi_port_ID_t)0; port_id < N_MIPI_PORT_ID; port_id++) {
+	for (port_id = (enum mipi_port_id)0; port_id < N_MIPI_PORT_ID; port_id++) {
 		mipi_port_get_state(ID, port_id,
 			&(state->mipi_port_state[port_id]));
 	}
@@ -245,7 +245,7 @@ void receiver_get_state(
 	state->be_irq_clear = receiver_reg_load(ID,
 		_HRT_CSS_RECEIVER_BE_IRQ_CLEAR_REG_IDX);
 
-return;
+	return;
 }
 
 bool is_mipi_format_yuv420(
@@ -258,7 +258,7 @@ bool is_mipi_format_yuv420(
 		(mipi_format == MIPI_FORMAT_YUV420_10_SHIFT));
 /* MIPI_FORMAT_YUV420_8_LEGACY is not YUV420 */
 
-return is_yuv420;
+	return is_yuv420;
 }
 
 void receiver_set_compression(
@@ -300,12 +300,12 @@ void receiver_set_compression(
 	reg = ((field_id < 6)?(val << (field_id * 5)):(val << ((field_id - 6) * 5)));
 	receiver_reg_store(ID, addr, reg);
 
-return;
+	return;
 }
 
 void receiver_port_enable(
 	const rx_ID_t			ID,
-	const mipi_port_ID_t		port_ID,
+	const enum mipi_port_id		port_ID,
 	const bool			cnd)
 {
 	hrt_data	reg = receiver_port_reg_load(ID, port_ID,
@@ -319,47 +319,47 @@ void receiver_port_enable(
 
 	receiver_port_reg_store(ID, port_ID,
 		_HRT_CSS_RECEIVER_DEVICE_READY_REG_IDX, reg);
-return;
+	return;
 }
 
 bool is_receiver_port_enabled(
 	const rx_ID_t			ID,
-	const mipi_port_ID_t		port_ID)
+	const enum mipi_port_id		port_ID)
 {
 	hrt_data	reg = receiver_port_reg_load(ID, port_ID,
 		_HRT_CSS_RECEIVER_DEVICE_READY_REG_IDX);
-return ((reg & 0x01) != 0);
+	return ((reg & 0x01) != 0);
 }
 
 void receiver_irq_enable(
 	const rx_ID_t			ID,
-	const mipi_port_ID_t		port_ID,
+	const enum mipi_port_id		port_ID,
 	const rx_irq_info_t		irq_info)
 {
 	receiver_port_reg_store(ID,
 		port_ID, _HRT_CSS_RECEIVER_IRQ_ENABLE_REG_IDX, irq_info);
-return;
+	return;
 }
 
 rx_irq_info_t receiver_get_irq_info(
 	const rx_ID_t			ID,
-	const mipi_port_ID_t		port_ID)
+	const enum mipi_port_id		port_ID)
 {
-return receiver_port_reg_load(ID,
+	return receiver_port_reg_load(ID,
 	port_ID, _HRT_CSS_RECEIVER_IRQ_STATUS_REG_IDX);
 }
 
 void receiver_irq_clear(
 	const rx_ID_t			ID,
-	const mipi_port_ID_t		port_ID,
+	const enum mipi_port_id		port_ID,
 	const rx_irq_info_t		irq_info)
 {
 	receiver_port_reg_store(ID,
 		port_ID, _HRT_CSS_RECEIVER_IRQ_STATUS_REG_IDX, irq_info);
-return;
+	return;
 }
 
-STORAGE_CLASS_INLINE void capture_unit_get_state(
+static inline void capture_unit_get_state(
 	const input_system_ID_t			ID,
 	const sub_system_ID_t			sub_id,
 	capture_unit_state_t			*state)
@@ -418,10 +418,10 @@ STORAGE_CLASS_INLINE void capture_unit_get_state(
 		sub_id,
 		CAPT_FSM_STATE_INFO_REG_ID);
 
-return;
+	return;
 }
 
-STORAGE_CLASS_INLINE void acquisition_unit_get_state(
+static inline void acquisition_unit_get_state(
 	const input_system_ID_t			ID,
 	const sub_system_ID_t			sub_id,
 	acquisition_unit_state_t		*state)
@@ -468,10 +468,10 @@ STORAGE_CLASS_INLINE void acquisition_unit_get_state(
 		sub_id,
 		ACQ_INT_CNTR_INFO_REG_ID);
 
-return;
+	return;
 }
 
-STORAGE_CLASS_INLINE void ctrl_unit_get_state(
+static inline void ctrl_unit_get_state(
 	const input_system_ID_t			ID,
 	const sub_system_ID_t			sub_id,
 	ctrl_unit_state_t			*state)
@@ -551,12 +551,12 @@ STORAGE_CLASS_INLINE void ctrl_unit_get_state(
 		sub_id,
 		ISYS_CTRL_CAPT_RESERVE_ONE_MEM_REGION_REG_ID);
 
-return;
+	return;
 }
 
-STORAGE_CLASS_INLINE void mipi_port_get_state(
+static inline void mipi_port_get_state(
 	const rx_ID_t				ID,
-	const mipi_port_ID_t			port_ID,
+	const enum mipi_port_id			port_ID,
 	mipi_port_state_t			*state)
 {
 	int	i;
@@ -587,10 +587,10 @@ STORAGE_CLASS_INLINE void mipi_port_get_state(
 		state->lane_rx_count[i] = (uint8_t)((state->rx_count)>>(i*8));
 	}
 
-return;
+	return;
 }
 
-STORAGE_CLASS_INLINE void rx_channel_get_state(
+static inline void rx_channel_get_state(
 	const rx_ID_t					ID,
 	const unsigned int				ch_id,
 	rx_channel_state_t				*state)
@@ -602,30 +602,30 @@ STORAGE_CLASS_INLINE void rx_channel_get_state(
 	assert(state != NULL);
 
 	switch (ch_id) {
-		case 0:
-			state->comp_scheme0 = receiver_reg_load(ID,
+	case 0:
+		state->comp_scheme0 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC0_REG0_IDX);
-			state->comp_scheme1 = receiver_reg_load(ID,
+		state->comp_scheme1 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC0_REG1_IDX);
-	break;
-		case 1:
-			state->comp_scheme0 = receiver_reg_load(ID,
+		break;
+	case 1:
+		state->comp_scheme0 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC1_REG0_IDX);
-			state->comp_scheme1 = receiver_reg_load(ID,
+		state->comp_scheme1 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC1_REG1_IDX);
-	break;
-		case 2:
-			state->comp_scheme0 = receiver_reg_load(ID,
+		break;
+	case 2:
+		state->comp_scheme0 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC2_REG0_IDX);
-			state->comp_scheme1 = receiver_reg_load(ID,
+		state->comp_scheme1 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC2_REG1_IDX);
-	break;
-		case 3:
-			state->comp_scheme0 = receiver_reg_load(ID,
+		break;
+	case 3:
+		state->comp_scheme0 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC3_REG0_IDX);
-			state->comp_scheme1 = receiver_reg_load(ID,
+		state->comp_scheme1 = receiver_reg_load(ID,
 				_HRT_CSS_RECEIVER_2400_COMP_SCHEME_VC3_REG1_IDX);
-	break;
+		break;
 	}
 
 /* See Table 7.1.17,..., 7.1.24 */
@@ -640,16 +640,16 @@ STORAGE_CLASS_INLINE void rx_channel_get_state(
 		state->pred[i] = (mipi_predictor_t)((val & 0x18) >> 3);
 	}
 
-return;
+	return;
 }
 
 // MW: "2400" in the name is not good, but this is to avoid a naming conflict
-input_system_cfg2400_t config;
+static input_system_cfg2400_t config;
 
 static void receiver_rst(
 	const rx_ID_t				ID)
 {
-	mipi_port_ID_t		port_id;
+	enum mipi_port_id		port_id;
 
 	assert(ID < N_RX_ID);
 

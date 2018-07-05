@@ -163,7 +163,8 @@ __setup_efi_pci32(efi_pci_io_protocol_32 *pci, struct pci_setup_rom **__rom)
 	if (status != EFI_SUCCESS)
 		goto free_struct;
 
-	memcpy(rom->romdata, pci->romimage, pci->romsize);
+	memcpy(rom->romdata, (void *)(unsigned long)pci->romimage,
+	       pci->romsize);
 	return status;
 
 free_struct:
@@ -269,7 +270,8 @@ __setup_efi_pci64(efi_pci_io_protocol_64 *pci, struct pci_setup_rom **__rom)
 	if (status != EFI_SUCCESS)
 		goto free_struct;
 
-	memcpy(rom->romdata, pci->romimage, pci->romsize);
+	memcpy(rom->romdata, (void *)(unsigned long)pci->romimage,
+	       pci->romsize);
 	return status;
 
 free_struct:
@@ -421,9 +423,10 @@ static void retrieve_apple_device_properties(struct boot_params *boot_params)
 	}
 }
 
+static const efi_char16_t apple[] = L"Apple";
+
 static void setup_quirks(struct boot_params *boot_params)
 {
-	efi_char16_t const apple[] = { 'A', 'p', 'p', 'l', 'e', 0 };
 	efi_char16_t *fw_vendor = (efi_char16_t *)(unsigned long)
 		efi_table_attr(efi_system_table, fw_vendor, sys_table);
 
@@ -439,7 +442,7 @@ setup_uga32(void **uga_handle, unsigned long size, u32 *width, u32 *height)
 	struct efi_uga_draw_protocol *uga = NULL, *first_uga;
 	efi_guid_t uga_proto = EFI_UGA_PROTOCOL_GUID;
 	unsigned long nr_ugas;
-	u32 *handles = (u32 *)uga_handle;;
+	u32 *handles = (u32 *)uga_handle;
 	efi_status_t status = EFI_INVALID_PARAMETER;
 	int i;
 
@@ -484,7 +487,7 @@ setup_uga64(void **uga_handle, unsigned long size, u32 *width, u32 *height)
 	struct efi_uga_draw_protocol *uga = NULL, *first_uga;
 	efi_guid_t uga_proto = EFI_UGA_PROTOCOL_GUID;
 	unsigned long nr_ugas;
-	u64 *handles = (u64 *)uga_handle;;
+	u64 *handles = (u64 *)uga_handle;
 	efi_status_t status = EFI_INVALID_PARAMETER;
 	int i;
 
@@ -999,6 +1002,7 @@ struct boot_params *efi_main(struct efi_config *c,
 
 	/* Ask the firmware to clear memory on unclean shutdown */
 	efi_enable_reset_attack_mitigation(sys_table);
+	efi_retrieve_tpm2_eventlog(sys_table);
 
 	setup_graphics(boot_params);
 

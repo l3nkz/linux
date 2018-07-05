@@ -67,9 +67,9 @@ void nf_ct_unlink_expect_report(struct nf_conntrack_expect *exp,
 }
 EXPORT_SYMBOL_GPL(nf_ct_unlink_expect_report);
 
-static void nf_ct_expectation_timed_out(unsigned long ul_expect)
+static void nf_ct_expectation_timed_out(struct timer_list *t)
 {
-	struct nf_conntrack_expect *exp = (void *)ul_expect;
+	struct nf_conntrack_expect *exp = from_timer(exp, t, timeout);
 
 	spin_lock_bh(&nf_conntrack_expect_lock);
 	nf_ct_unlink_expect(exp);
@@ -252,7 +252,7 @@ static inline int expect_clash(const struct nf_conntrack_expect *a,
 static inline int expect_matches(const struct nf_conntrack_expect *a,
 				 const struct nf_conntrack_expect *b)
 {
-	return a->master == b->master && a->class == b->class &&
+	return a->master == b->master &&
 	       nf_ct_tuple_equal(&a->tuple, &b->tuple) &&
 	       nf_ct_tuple_mask_equal(&a->mask, &b->mask) &&
 	       net_eq(nf_ct_net(a->master), nf_ct_net(b->master)) &&
@@ -368,8 +368,7 @@ static void nf_ct_expect_insert(struct nf_conntrack_expect *exp)
 	/* two references : one for hash insert, one for the timer */
 	refcount_add(2, &exp->use);
 
-	setup_timer(&exp->timeout, nf_ct_expectation_timed_out,
-		    (unsigned long)exp);
+	timer_setup(&exp->timeout, nf_ct_expectation_timed_out, 0);
 	helper = rcu_dereference_protected(master_help->helper,
 					   lockdep_is_held(&nf_conntrack_expect_lock));
 	if (helper) {
@@ -422,6 +421,9 @@ static inline int __nf_ct_expect_check(struct nf_conntrack_expect *expect)
 	h = nf_ct_expect_dst_hash(net, &expect->tuple);
 	hlist_for_each_entry_safe(i, next, &nf_ct_expect_hash[h], hnode) {
 		if (expect_matches(i, expect)) {
+			if (i->class != expect->class)
+				return -EALREADY;
+
 			if (nf_ct_remove_expect(i))
 				break;
 		} else if (expect_clash(i, expect)) {
@@ -650,7 +652,6 @@ static int exp_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations exp_file_ops = {
-	.owner   = THIS_MODULE,
 	.open    = exp_open,
 	.read    = seq_read,
 	.llseek  = seq_lseek,

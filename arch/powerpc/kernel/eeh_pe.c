@@ -526,16 +526,16 @@ int eeh_rmv_from_parent_pe(struct eeh_dev *edev)
  */
 void eeh_pe_update_time_stamp(struct eeh_pe *pe)
 {
-	struct timeval tstamp;
+	time64_t tstamp;
 
 	if (!pe) return;
 
 	if (pe->freeze_count <= 0) {
 		pe->freeze_count = 0;
-		do_gettimeofday(&pe->tstamp);
+		pe->tstamp = ktime_get_seconds();
 	} else {
-		do_gettimeofday(&tstamp);
-		if (tstamp.tv_sec - pe->tstamp.tv_sec > 3600) {
+		tstamp = ktime_get_seconds();
+		if (tstamp - pe->tstamp > 3600) {
 			pe->tstamp = tstamp;
 			pe->freeze_count = 0;
 		}
@@ -807,7 +807,8 @@ static void eeh_restore_bridge_bars(struct eeh_dev *edev)
 	eeh_ops->write_config(pdn, 15*4, 4, edev->config_space[15]);
 
 	/* PCI Command: 0x4 */
-	eeh_ops->write_config(pdn, PCI_COMMAND, 4, edev->config_space[1]);
+	eeh_ops->write_config(pdn, PCI_COMMAND, 4, edev->config_space[1] |
+			      PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER);
 
 	/* Check the PCIe link is ready */
 	eeh_bridge_check_link(edev);

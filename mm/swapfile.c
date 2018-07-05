@@ -85,7 +85,7 @@ PLIST_HEAD(swap_active_head);
  * is held and the locking order requires swap_lock to be taken
  * before any swap_info_struct->lock.
  */
-struct plist_head *swap_avail_heads;
+static struct plist_head *swap_avail_heads;
 static DEFINE_SPINLOCK(swap_avail_lock);
 
 struct swap_info_struct *swap_info[MAX_SWAPFILES];
@@ -1326,6 +1326,13 @@ int page_swapcount(struct page *page)
 		unlock_cluster_or_swap_info(p, ci);
 	}
 	return count;
+}
+
+int __swap_count(struct swap_info_struct *si, swp_entry_t entry)
+{
+	pgoff_t offset = swp_offset(entry);
+
+	return swap_count(si->swap_map[offset]);
 }
 
 static int swap_swapcount(struct swap_info_struct *si, swp_entry_t entry)
@@ -2690,7 +2697,7 @@ out:
 }
 
 #ifdef CONFIG_PROC_FS
-static unsigned swaps_poll(struct file *file, poll_table *wait)
+static __poll_t swaps_poll(struct file *file, poll_table *wait)
 {
 	struct seq_file *seq = file->private_data;
 
@@ -2698,10 +2705,10 @@ static unsigned swaps_poll(struct file *file, poll_table *wait)
 
 	if (seq->poll_event != atomic_read(&proc_poll_event)) {
 		seq->poll_event = atomic_read(&proc_poll_event);
-		return POLLIN | POLLRDNORM | POLLERR | POLLPRI;
+		return EPOLLIN | EPOLLRDNORM | EPOLLERR | EPOLLPRI;
 	}
 
-	return POLLIN | POLLRDNORM;
+	return EPOLLIN | EPOLLRDNORM;
 }
 
 /* iterator */
@@ -2954,6 +2961,10 @@ static unsigned long read_swap_header(struct swap_info_struct *p,
 	maxpages = swp_offset(pte_to_swp_entry(
 			swp_entry_to_pte(swp_entry(0, ~0UL)))) + 1;
 	last_page = swap_header->info.last_page;
+	if (!last_page) {
+		pr_warn("Empty swap-file\n");
+		return 0;
+	}
 	if (last_page > maxpages) {
 		pr_warn("Truncating oversized swap area, only using %luk out of %luk\n",
 			maxpages << (PAGE_SHIFT - 10),
@@ -3101,6 +3112,7 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 	unsigned long *frontswap_map = NULL;
 	struct page *page = NULL;
 	struct inode *inode = NULL;
+	bool inced_nr_rotate_swap = false;
 
 	if (swap_flags & ~SWAP_FLAGS_VALID)
 		return -EINVAL;
@@ -3169,6 +3181,9 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 	if (bdi_cap_stable_pages_required(inode_to_bdi(inode)))
 		p->flags |= SWP_STABLE_WRITES;
 
+	if (bdi_cap_synchronous_io(inode_to_bdi(inode)))
+		p->flags |= SWP_SYNCHRONOUS_IO;
+
 	if (p->bdev && blk_queue_nonrot(bdev_get_queue(p->bdev))) {
 		int cpu;
 		unsigned long ci, nr_cluster;
@@ -3201,8 +3216,10 @@ SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 			cluster = per_cpu_ptr(p->percpu_cluster, cpu);
 			cluster_set_null(&cluster->index);
 		}
-	} else
+	} else {
 		atomic_inc(&nr_rotate_swap);
+		inced_nr_rotate_swap = true;
+	}
 
 	error = swap_cgroup_swapon(p->type, maxpages);
 	if (error)
@@ -3293,6 +3310,8 @@ bad_swap:
 	vfree(swap_map);
 	kvfree(cluster_info);
 	kvfree(frontswap_map);
+	if (inced_nr_rotate_swap)
+		atomic_dec(&nr_rotate_swap);
 	if (swap_file) {
 		if (inode && S_ISREG(inode->i_mode)) {
 			inode_unlock(inode);
@@ -3452,10 +3471,15 @@ int swapcache_prepare(swp_entry_t entry)
 	return __swap_duplicate(entry, SWAP_HAS_CACHE);
 }
 
+struct swap_info_struct *swp_swap_info(swp_entry_t entry)
+{
+	return swap_info[swp_type(entry)];
+}
+
 struct swap_info_struct *page_swap_info(struct page *page)
 {
-	swp_entry_t swap = { .val = page_private(page) };
-	return swap_info[swp_type(swap)];
+	swp_entry_t entry = { .val = page_private(page) };
+	return swp_swap_info(entry);
 }
 
 /*
@@ -3463,7 +3487,6 @@ struct swap_info_struct *page_swap_info(struct page *page)
  */
 struct address_space *__page_file_mapping(struct page *page)
 {
-	VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 	return page_swap_info(page)->swap_file->f_mapping;
 }
 EXPORT_SYMBOL_GPL(__page_file_mapping);
@@ -3471,7 +3494,6 @@ EXPORT_SYMBOL_GPL(__page_file_mapping);
 pgoff_t __page_file_index(struct page *page)
 {
 	swp_entry_t swap = { .val = page_private(page) };
-	VM_BUG_ON_PAGE(!PageSwapCache(page), page);
 	return swp_offset(swap);
 }
 EXPORT_SYMBOL_GPL(__page_file_index);

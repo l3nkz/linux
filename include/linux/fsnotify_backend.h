@@ -18,6 +18,7 @@
 #include <linux/types.h>
 #include <linux/atomic.h>
 #include <linux/user_namespace.h>
+#include <linux/refcount.h>
 
 /*
  * IN_* from inotfy.h lines up EXACTLY with FS_*, this is so we can easily
@@ -136,7 +137,7 @@ struct fsnotify_group {
 	 * inotify_init() and the refcnt will hit 0 only when that fd has been
 	 * closed.
 	 */
-	atomic_t refcnt;		/* things with interest in this group */
+	refcount_t refcnt;		/* things with interest in this group */
 
 	const struct fsnotify_ops *ops;	/* how this group handles things */
 
@@ -183,14 +184,13 @@ struct fsnotify_group {
 #endif
 #ifdef CONFIG_FANOTIFY
 		struct fanotify_group_private_data {
-#ifdef CONFIG_FANOTIFY_ACCESS_PERMISSIONS
 			/* allows a group to block waiting for a userspace response */
 			struct list_head access_list;
 			wait_queue_head_t access_waitq;
-#endif /* CONFIG_FANOTIFY_ACCESS_PERMISSIONS */
 			int f_flags;
 			unsigned int max_marks;
 			struct user_struct *user;
+			bool audit;
 		} fanotify_data;
 #endif /* CONFIG_FANOTIFY */
 	};
@@ -217,12 +217,10 @@ struct fsnotify_mark_connector {
 	union {	/* Object pointer [lock] */
 		struct inode *inode;
 		struct vfsmount *mnt;
-	};
-	union {
-		struct hlist_head list;
 		/* Used listing heads to free after srcu period expires */
 		struct fsnotify_mark_connector *destroy_next;
 	};
+	struct hlist_head list;
 };
 
 /*
@@ -244,11 +242,11 @@ struct fsnotify_mark {
 	__u32 mask;
 	/* We hold one for presence in g_list. Also one ref for each 'thing'
 	 * in kernel that found and may be using this mark. */
-	atomic_t refcnt;
+	refcount_t refcnt;
 	/* Group this mark is for. Set on mark creation, stable until last ref
 	 * is dropped */
 	struct fsnotify_group *group;
-	/* List of marks by group->i_fsnotify_marks. Also reused for queueing
+	/* List of marks by group->marks_list. Also reused for queueing
 	 * mark into destroy_list when it's waiting for the end of SRCU period
 	 * before it can be freed. [group->mark_mutex] */
 	struct list_head g_list;
@@ -331,6 +329,12 @@ extern int fsnotify_add_event(struct fsnotify_group *group,
 			      struct fsnotify_event *event,
 			      int (*merge)(struct list_head *,
 					   struct fsnotify_event *));
+/* Queue overflow event to a notification group */
+static inline void fsnotify_queue_overflow(struct fsnotify_group *group)
+{
+	fsnotify_add_event(group, group->overflow_event, NULL);
+}
+
 /* true if the group notification queue is empty */
 extern bool fsnotify_notify_queue_is_empty(struct fsnotify_group *group);
 /* return, but do not dequeue the first event on the notification queue */

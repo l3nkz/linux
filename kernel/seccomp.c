@@ -19,6 +19,8 @@
 #include <linux/compat.h>
 #include <linux/coredump.h>
 #include <linux/kmemleak.h>
+#include <linux/nospec.h>
+#include <linux/prctl.h>
 #include <linux/sched.h>
 #include <linux/sched/task_stack.h>
 #include <linux/seccomp.h>
@@ -190,7 +192,7 @@ static u32 seccomp_run_filters(const struct seccomp_data *sd,
 	u32 ret = SECCOMP_RET_ALLOW;
 	/* Make sure cross-thread synced filter points somewhere sane. */
 	struct seccomp_filter *f =
-			lockless_dereference(current->seccomp.filter);
+			READ_ONCE(current->seccomp.filter);
 
 	/* Ensure unexpected behavior doesn't result in failing open. */
 	if (unlikely(WARN_ON(f == NULL)))
@@ -227,8 +229,11 @@ static inline bool seccomp_may_assign_mode(unsigned long seccomp_mode)
 	return true;
 }
 
+void __weak arch_seccomp_spec_mitigate(struct task_struct *task) { }
+
 static inline void seccomp_assign_mode(struct task_struct *task,
-				       unsigned long seccomp_mode)
+				       unsigned long seccomp_mode,
+				       unsigned long flags)
 {
 	assert_spin_locked(&task->sighand->siglock);
 
@@ -238,6 +243,9 @@ static inline void seccomp_assign_mode(struct task_struct *task,
 	 * filter) is set.
 	 */
 	smp_mb__before_atomic();
+	/* Assume default seccomp processes want spec flaw mitigation. */
+	if ((flags & SECCOMP_FILTER_FLAG_SPEC_ALLOW) == 0)
+		arch_seccomp_spec_mitigate(task);
 	set_tsk_thread_flag(task, TIF_SECCOMP);
 }
 
@@ -305,7 +313,7 @@ static inline pid_t seccomp_can_sync_threads(void)
  * without dropping the locks.
  *
  */
-static inline void seccomp_sync_threads(void)
+static inline void seccomp_sync_threads(unsigned long flags)
 {
 	struct task_struct *thread, *caller;
 
@@ -346,7 +354,8 @@ static inline void seccomp_sync_threads(void)
 		 * allow one thread to transition the other.
 		 */
 		if (thread->seccomp.mode == SECCOMP_MODE_DISABLED)
-			seccomp_assign_mode(thread, SECCOMP_MODE_FILTER);
+			seccomp_assign_mode(thread, SECCOMP_MODE_FILTER,
+					    flags);
 	}
 }
 
@@ -469,7 +478,7 @@ static long seccomp_attach_filter(unsigned int flags,
 
 	/* Now that the new filter is in place, synchronize to all threads. */
 	if (flags & SECCOMP_FILTER_FLAG_TSYNC)
-		seccomp_sync_threads();
+		seccomp_sync_threads(flags);
 
 	return 0;
 }
@@ -515,7 +524,7 @@ void put_seccomp_filter(struct task_struct *tsk)
 
 static void seccomp_init_siginfo(siginfo_t *info, int syscall, int reason)
 {
-	memset(info, 0, sizeof(*info));
+	clear_siginfo(info);
 	info->si_signo = SIGSYS;
 	info->si_code = SYS_SECCOMP;
 	info->si_call_addr = (void __user *)KSTK_EIP(current);
@@ -818,7 +827,7 @@ static long seccomp_set_mode_strict(void)
 #ifdef TIF_NOTSC
 	disable_TSC();
 #endif
-	seccomp_assign_mode(current, seccomp_mode);
+	seccomp_assign_mode(current, seccomp_mode, 0);
 	ret = 0;
 
 out:
@@ -876,7 +885,7 @@ static long seccomp_set_mode_filter(unsigned int flags,
 	/* Do not free the successfully attached filter. */
 	prepared = NULL;
 
-	seccomp_assign_mode(current, seccomp_mode);
+	seccomp_assign_mode(current, seccomp_mode, flags);
 out:
 	spin_unlock_irq(&current->sighand->siglock);
 	if (flags & SECCOMP_FILTER_FLAG_TSYNC)
@@ -978,48 +987,67 @@ long prctl_set_seccomp(unsigned long seccomp_mode, char __user *filter)
 }
 
 #if defined(CONFIG_SECCOMP_FILTER) && defined(CONFIG_CHECKPOINT_RESTORE)
+static struct seccomp_filter *get_nth_filter(struct task_struct *task,
+					     unsigned long filter_off)
+{
+	struct seccomp_filter *orig, *filter;
+	unsigned long count;
+
+	/*
+	 * Note: this is only correct because the caller should be the (ptrace)
+	 * tracer of the task, otherwise lock_task_sighand is needed.
+	 */
+	spin_lock_irq(&task->sighand->siglock);
+
+	if (task->seccomp.mode != SECCOMP_MODE_FILTER) {
+		spin_unlock_irq(&task->sighand->siglock);
+		return ERR_PTR(-EINVAL);
+	}
+
+	orig = task->seccomp.filter;
+	__get_seccomp_filter(orig);
+	spin_unlock_irq(&task->sighand->siglock);
+
+	count = 0;
+	for (filter = orig; filter; filter = filter->prev)
+		count++;
+
+	if (filter_off >= count) {
+		filter = ERR_PTR(-ENOENT);
+		goto out;
+	}
+
+	count -= filter_off;
+	for (filter = orig; filter && count > 1; filter = filter->prev)
+		count--;
+
+	if (WARN_ON(count != 1 || !filter)) {
+		filter = ERR_PTR(-ENOENT);
+		goto out;
+	}
+
+	__get_seccomp_filter(filter);
+
+out:
+	__put_seccomp_filter(orig);
+	return filter;
+}
+
 long seccomp_get_filter(struct task_struct *task, unsigned long filter_off,
 			void __user *data)
 {
 	struct seccomp_filter *filter;
 	struct sock_fprog_kern *fprog;
 	long ret;
-	unsigned long count = 0;
 
 	if (!capable(CAP_SYS_ADMIN) ||
 	    current->seccomp.mode != SECCOMP_MODE_DISABLED) {
 		return -EACCES;
 	}
 
-	spin_lock_irq(&task->sighand->siglock);
-	if (task->seccomp.mode != SECCOMP_MODE_FILTER) {
-		ret = -EINVAL;
-		goto out;
-	}
-
-	filter = task->seccomp.filter;
-	while (filter) {
-		filter = filter->prev;
-		count++;
-	}
-
-	if (filter_off >= count) {
-		ret = -ENOENT;
-		goto out;
-	}
-	count -= filter_off;
-
-	filter = task->seccomp.filter;
-	while (filter && count > 1) {
-		filter = filter->prev;
-		count--;
-	}
-
-	if (WARN_ON(count != 1 || !filter)) {
-		/* The filter tree shouldn't shrink while we're using it. */
-		ret = -ENOENT;
-		goto out;
-	}
+	filter = get_nth_filter(task, filter_off);
+	if (IS_ERR(filter))
+		return PTR_ERR(filter);
 
 	fprog = filter->prog->orig_prog;
 	if (!fprog) {
@@ -1035,17 +1063,46 @@ long seccomp_get_filter(struct task_struct *task, unsigned long filter_off,
 	if (!data)
 		goto out;
 
-	__get_seccomp_filter(filter);
-	spin_unlock_irq(&task->sighand->siglock);
-
 	if (copy_to_user(data, fprog->filter, bpf_classic_proglen(fprog)))
 		ret = -EFAULT;
 
+out:
 	__put_seccomp_filter(filter);
 	return ret;
+}
 
-out:
-	spin_unlock_irq(&task->sighand->siglock);
+long seccomp_get_metadata(struct task_struct *task,
+			  unsigned long size, void __user *data)
+{
+	long ret;
+	struct seccomp_filter *filter;
+	struct seccomp_metadata kmd = {};
+
+	if (!capable(CAP_SYS_ADMIN) ||
+	    current->seccomp.mode != SECCOMP_MODE_DISABLED) {
+		return -EACCES;
+	}
+
+	size = min_t(unsigned long, size, sizeof(kmd));
+
+	if (size < sizeof(kmd.filter_off))
+		return -EINVAL;
+
+	if (copy_from_user(&kmd.filter_off, data, sizeof(kmd.filter_off)))
+		return -EFAULT;
+
+	filter = get_nth_filter(task, kmd.filter_off);
+	if (IS_ERR(filter))
+		return PTR_ERR(filter);
+
+	if (filter->log)
+		kmd.flags |= SECCOMP_FILTER_FLAG_LOG;
+
+	ret = size;
+	if (copy_to_user(data, &kmd, size))
+		ret = -EFAULT;
+
+	__put_seccomp_filter(filter);
 	return ret;
 }
 #endif

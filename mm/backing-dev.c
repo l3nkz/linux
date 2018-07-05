@@ -100,24 +100,26 @@ static int bdi_debug_stats_show(struct seq_file *m, void *v)
 
 	return 0;
 }
+DEFINE_SHOW_ATTRIBUTE(bdi_debug_stats);
 
-static int bdi_debug_stats_open(struct inode *inode, struct file *file)
+static int bdi_debug_register(struct backing_dev_info *bdi, const char *name)
 {
-	return single_open(file, bdi_debug_stats_show, inode->i_private);
-}
+	if (!bdi_debug_root)
+		return -ENOMEM;
 
-static const struct file_operations bdi_debug_stats_fops = {
-	.open		= bdi_debug_stats_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
-static void bdi_debug_register(struct backing_dev_info *bdi, const char *name)
-{
 	bdi->debug_dir = debugfs_create_dir(name, bdi_debug_root);
+	if (!bdi->debug_dir)
+		return -ENOMEM;
+
 	bdi->debug_stats = debugfs_create_file("stats", 0444, bdi->debug_dir,
 					       bdi, &bdi_debug_stats_fops);
+	if (!bdi->debug_stats) {
+		debugfs_remove(bdi->debug_dir);
+		bdi->debug_dir = NULL;
+		return -ENOMEM;
+	}
+
+	return 0;
 }
 
 static void bdi_debug_unregister(struct backing_dev_info *bdi)
@@ -129,9 +131,10 @@ static void bdi_debug_unregister(struct backing_dev_info *bdi)
 static inline void bdi_debug_init(void)
 {
 }
-static inline void bdi_debug_register(struct backing_dev_info *bdi,
+static inline int bdi_debug_register(struct backing_dev_info *bdi,
 				      const char *name)
 {
+	return 0;
 }
 static inline void bdi_debug_unregister(struct backing_dev_info *bdi)
 {
@@ -381,7 +384,7 @@ static void wb_shutdown(struct bdi_writeback *wb)
 	 * the barrier provided by test_and_clear_bit() above.
 	 */
 	smp_wmb();
-	clear_bit(WB_shutting_down, &wb->state);
+	clear_and_wake_up_bit(WB_shutting_down, &wb->state);
 }
 
 static void wb_exit(struct bdi_writeback *wb)
@@ -732,7 +735,6 @@ static void cgwb_bdi_unregister(struct backing_dev_info *bdi)
  */
 void wb_memcg_offline(struct mem_cgroup *memcg)
 {
-	LIST_HEAD(to_destroy);
 	struct list_head *memcg_cgwb_list = mem_cgroup_cgwb_list(memcg);
 	struct bdi_writeback *wb, *next;
 
@@ -751,7 +753,6 @@ void wb_memcg_offline(struct mem_cgroup *memcg)
  */
 void wb_blkcg_offline(struct blkcg *blkcg)
 {
-	LIST_HEAD(to_destroy);
 	struct bdi_writeback *wb, *next;
 
 	spin_lock_irq(&cgwb_lock);
@@ -1020,23 +1021,18 @@ EXPORT_SYMBOL(congestion_wait);
 
 /**
  * wait_iff_congested - Conditionally wait for a backing_dev to become uncongested or a pgdat to complete writes
- * @pgdat: A pgdat to check if it is heavily congested
  * @sync: SYNC or ASYNC IO
  * @timeout: timeout in jiffies
  *
- * In the event of a congested backing_dev (any backing_dev) and the given
- * @pgdat has experienced recent congestion, this waits for up to @timeout
- * jiffies for either a BDI to exit congestion of the given @sync queue
- * or a write to complete.
- *
- * In the absence of pgdat congestion, cond_resched() is called to yield
- * the processor if necessary but otherwise does not sleep.
+ * In the event of a congested backing_dev (any backing_dev) this waits
+ * for up to @timeout jiffies for either a BDI to exit congestion of the
+ * given @sync queue or a write to complete.
  *
  * The return value is 0 if the sleep is for the full timeout. Otherwise,
  * it is the number of jiffies that were still remaining when the function
  * returned. return_value == timeout implies the function did not sleep.
  */
-long wait_iff_congested(struct pglist_data *pgdat, int sync, long timeout)
+long wait_iff_congested(int sync, long timeout)
 {
 	long ret;
 	unsigned long start = jiffies;
@@ -1044,12 +1040,10 @@ long wait_iff_congested(struct pglist_data *pgdat, int sync, long timeout)
 	wait_queue_head_t *wqh = &congestion_wqh[sync];
 
 	/*
-	 * If there is no congestion, or heavy congestion is not being
-	 * encountered in the current pgdat, yield if necessary instead
+	 * If there is no congestion, yield if necessary instead
 	 * of sleeping on the congestion queue
 	 */
-	if (atomic_read(&nr_wb_congested[sync]) == 0 ||
-	    !test_bit(PGDAT_CONGESTED, &pgdat->flags)) {
+	if (atomic_read(&nr_wb_congested[sync]) == 0) {
 		cond_resched();
 
 		/* In case we scheduled, work out time remaining */
@@ -1072,23 +1066,3 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL(wait_iff_congested);
-
-int pdflush_proc_obsolete(struct ctl_table *table, int write,
-			void __user *buffer, size_t *lenp, loff_t *ppos)
-{
-	char kbuf[] = "0\n";
-
-	if (*ppos || *lenp < sizeof(kbuf)) {
-		*lenp = 0;
-		return 0;
-	}
-
-	if (copy_to_user(buffer, kbuf, sizeof(kbuf)))
-		return -EFAULT;
-	pr_warn_once("%s exported in /proc is scheduled for removal\n",
-		     table->procname);
-
-	*lenp = 2;
-	*ppos += *lenp;
-	return 2;
-}

@@ -1,19 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2007 Oracle.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public
- * License v2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public
- * License along with this program; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 021110-1307, USA.
  */
 
 #include <linux/slab.h>
@@ -241,6 +228,15 @@ static int __btrfs_add_ordered_extent(struct inode *inode, u64 file_offset,
 		spin_unlock(&fs_info->ordered_root_lock);
 	}
 	spin_unlock(&root->ordered_extent_lock);
+
+	/*
+	 * We don't need the count_max_extents here, we can assume that all of
+	 * that work has been done at higher layers, so this is truly the
+	 * smallest the extent is going to get.
+	 */
+	spin_lock(&BTRFS_I(inode)->lock);
+	btrfs_mod_outstanding_extents(BTRFS_I(inode), 1);
+	spin_unlock(&BTRFS_I(inode)->lock);
 
 	return 0;
 }
@@ -591,11 +587,19 @@ void btrfs_remove_ordered_extent(struct inode *inode,
 {
 	struct btrfs_fs_info *fs_info = btrfs_sb(inode->i_sb);
 	struct btrfs_ordered_inode_tree *tree;
-	struct btrfs_root *root = BTRFS_I(inode)->root;
+	struct btrfs_inode *btrfs_inode = BTRFS_I(inode);
+	struct btrfs_root *root = btrfs_inode->root;
 	struct rb_node *node;
 	bool dec_pending_ordered = false;
 
-	tree = &BTRFS_I(inode)->ordered_tree;
+	/* This is paired with btrfs_add_ordered_extent. */
+	spin_lock(&btrfs_inode->lock);
+	btrfs_mod_outstanding_extents(btrfs_inode, -1);
+	spin_unlock(&btrfs_inode->lock);
+	if (root != fs_info->tree_root)
+		btrfs_delalloc_release_metadata(btrfs_inode, entry->len, false);
+
+	tree = &btrfs_inode->ordered_tree;
 	spin_lock_irq(&tree->lock);
 	node = &entry->rb_node;
 	rb_erase(node, &tree->tree);
@@ -1137,7 +1141,7 @@ int __init ordered_data_init(void)
 	return 0;
 }
 
-void ordered_data_exit(void)
+void __cold ordered_data_exit(void)
 {
 	kmem_cache_destroy(btrfs_ordered_extent_cache);
 }

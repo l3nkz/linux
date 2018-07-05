@@ -93,7 +93,6 @@ struct task_group;
 
 /* Convenience macros for the sake of wake_up(): */
 #define TASK_NORMAL			(TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE)
-#define TASK_ALL			(TASK_NORMAL | __TASK_STOPPED | __TASK_TRACED)
 
 /* get_task_state(): */
 #define TASK_REPORT			(TASK_RUNNING | TASK_INTERRUPTIBLE | \
@@ -113,17 +112,36 @@ struct task_group;
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
 
+/*
+ * Special states are those that do not use the normal wait-loop pattern. See
+ * the comment with set_special_state().
+ */
+#define is_special_task_state(state)				\
+	((state) & (__TASK_STOPPED | __TASK_TRACED | TASK_DEAD))
+
 #define __set_current_state(state_value)			\
 	do {							\
+		WARN_ON_ONCE(is_special_task_state(state_value));\
 		current->task_state_change = _THIS_IP_;		\
 		current->state = (state_value);			\
 	} while (0)
+
 #define set_current_state(state_value)				\
 	do {							\
+		WARN_ON_ONCE(is_special_task_state(state_value));\
 		current->task_state_change = _THIS_IP_;		\
 		smp_store_mb(current->state, (state_value));	\
 	} while (0)
 
+#define set_special_state(state_value)					\
+	do {								\
+		unsigned long flags; /* may shadow */			\
+		WARN_ON_ONCE(!is_special_task_state(state_value));	\
+		raw_spin_lock_irqsave(&current->pi_lock, flags);	\
+		current->task_state_change = _THIS_IP_;			\
+		current->state = (state_value);				\
+		raw_spin_unlock_irqrestore(&current->pi_lock, flags);	\
+	} while (0)
 #else
 /*
  * set_current_state() includes a barrier so that the write of current->state
@@ -145,8 +163,8 @@ struct task_group;
  *
  * The above is typically ordered against the wakeup, which does:
  *
- *	need_sleep = false;
- *	wake_up_state(p, TASK_UNINTERRUPTIBLE);
+ *   need_sleep = false;
+ *   wake_up_state(p, TASK_UNINTERRUPTIBLE);
  *
  * Where wake_up_state() (and all other wakeup primitives) imply enough
  * barriers to order the store of the variable against wakeup.
@@ -155,18 +173,37 @@ struct task_group;
  * once it observes the TASK_UNINTERRUPTIBLE store the waking CPU can issue a
  * TASK_RUNNING store which can collide with __set_current_state(TASK_RUNNING).
  *
- * This is obviously fine, since they both store the exact same value.
+ * However, with slightly different timing the wakeup TASK_RUNNING store can
+ * also collide with the TASK_UNINTERRUPTIBLE store. Loosing that store is not
+ * a problem either because that will result in one extra go around the loop
+ * and our @cond test will save the day.
  *
  * Also see the comments of try_to_wake_up().
  */
-#define __set_current_state(state_value) do { current->state = (state_value); } while (0)
-#define set_current_state(state_value)	 smp_store_mb(current->state, (state_value))
+#define __set_current_state(state_value)				\
+	current->state = (state_value)
+
+#define set_current_state(state_value)					\
+	smp_store_mb(current->state, (state_value))
+
+/*
+ * set_special_state() should be used for those states when the blocking task
+ * can not use the regular condition based wait-loop. In that case we must
+ * serialize against wakeups such that any possible in-flight TASK_RUNNING stores
+ * will not collide with our state change.
+ */
+#define set_special_state(state_value)					\
+	do {								\
+		unsigned long flags; /* may shadow */			\
+		raw_spin_lock_irqsave(&current->pi_lock, flags);	\
+		current->state = (state_value);				\
+		raw_spin_unlock_irqrestore(&current->pi_lock, flags);	\
+	} while (0)
+
 #endif
 
 /* Task command name length: */
 #define TASK_COMM_LEN			16
-
-extern cpumask_var_t			cpu_isolated_map;
 
 extern void scheduler_tick(void);
 
@@ -277,6 +314,34 @@ struct load_weight {
 	u32				inv_weight;
 };
 
+/**
+ * struct util_est - Estimation utilization of FAIR tasks
+ * @enqueued: instantaneous estimated utilization of a task/cpu
+ * @ewma:     the Exponential Weighted Moving Average (EWMA)
+ *            utilization of a task
+ *
+ * Support data structure to track an Exponential Weighted Moving Average
+ * (EWMA) of a FAIR task's utilization. New samples are added to the moving
+ * average each time a task completes an activation. Sample's weight is chosen
+ * so that the EWMA will be relatively insensitive to transient changes to the
+ * task's workload.
+ *
+ * The enqueued attribute has a slightly different meaning for tasks and cpus:
+ * - task:   the task's util_avg at last task dequeue time
+ * - cfs_rq: the sum of util_est.enqueued for each RUNNABLE task on that CPU
+ * Thus, the util_est.enqueued of a task represents the contribution on the
+ * estimated utilization of the CPU where that task is currently enqueued.
+ *
+ * Only for tasks we track a moving average of the past instantaneous
+ * estimated utilization. This allows to absorb sporadic drops in utilization
+ * of an otherwise almost periodic task.
+ */
+struct util_est {
+	unsigned int			enqueued;
+	unsigned int			ewma;
+#define UTIL_EST_WEIGHT_SHIFT		2
+} __attribute__((__aligned__(sizeof(u64))));
+
 /*
  * The load_avg/util_avg accumulates an infinite geometric series
  * (see __update_load_avg() in kernel/sched/fair.c).
@@ -332,11 +397,14 @@ struct load_weight {
 struct sched_avg {
 	u64				last_update_time;
 	u64				load_sum;
+	u64				runnable_load_sum;
 	u32				util_sum;
 	u32				period_contrib;
 	unsigned long			load_avg;
+	unsigned long			runnable_load_avg;
 	unsigned long			util_avg;
-};
+	struct util_est			util_est;
+} ____cacheline_aligned;
 
 struct sched_statistics {
 #ifdef CONFIG_SCHEDSTATS
@@ -377,6 +445,7 @@ struct sched_statistics {
 struct sched_entity {
 	/* For load-balancing: */
 	struct load_weight		load;
+	unsigned long			runnable_weight;
 	struct rb_node			run_node;
 	struct list_head		group_node;
 	unsigned int			on_rq;
@@ -406,7 +475,7 @@ struct sched_entity {
 	 * Put into separate cache line so it does not
 	 * collide with read-mostly values above.
 	 */
-	struct sched_avg		avg ____cacheline_aligned_in_smp;
+	struct sched_avg		avg;
 #endif
 };
 
@@ -471,11 +540,15 @@ struct sched_dl_entity {
 	 * has not been executed yet. This flag is useful to avoid race
 	 * conditions between the inactive timer handler and the wakeup
 	 * code.
+	 *
+	 * @dl_overrun tells if the task asked to be informed about runtime
+	 * overruns.
 	 */
-	int				dl_throttled;
-	int				dl_boosted;
-	int				dl_yielded;
-	int				dl_non_contending;
+	unsigned int			dl_throttled      : 1;
+	unsigned int			dl_boosted        : 1;
+	unsigned int			dl_yielded        : 1;
+	unsigned int			dl_non_contending : 1;
+	unsigned int			dl_overrun	  : 1;
 
 	/*
 	 * Bandwidth enforcement timer. Each -deadline task has its
@@ -550,6 +623,14 @@ struct task_struct {
 	unsigned long			wakee_flip_decay_ts;
 	struct task_struct		*last_wakee;
 
+	/*
+	 * recent_used_cpu is initially set as the last CPU used by a task
+	 * that wakes affine another task. Waker/wakee relationships can
+	 * push tasks around a CPU where each wakeup moves to the next one.
+	 * Tracking a recently used CPU allows a quick search for a recently
+	 * used CPU that may be idle.
+	 */
+	int				recent_used_cpu;
 	int				wake_cpu;
 #endif
 	int				on_rq;
@@ -846,17 +927,6 @@ struct task_struct {
 	int				lockdep_depth;
 	unsigned int			lockdep_recursion;
 	struct held_lock		held_locks[MAX_LOCK_DEPTH];
-#endif
-
-#ifdef CONFIG_LOCKDEP_CROSSRELEASE
-#define MAX_XHLOCKS_NR 64UL
-	struct hist_lock *xhlocks; /* Crossrelease history locks */
-	unsigned int xhlock_idx;
-	/* For restoring at history boundaries */
-	unsigned int xhlock_idx_hist[XHLOCK_CTX_NR];
-	unsigned int hist_id;
-	/* For overwrite check at each context exit */
-	unsigned int hist_id_save[XHLOCK_CTX_NR];
 #endif
 
 #ifdef CONFIG_UBSAN
@@ -1246,7 +1316,7 @@ static inline pid_t task_pgrp_nr(struct task_struct *tsk)
 #define TASK_REPORT_IDLE	(TASK_REPORT + 1)
 #define TASK_REPORT_MAX		(TASK_REPORT_IDLE << 1)
 
-static inline unsigned int __get_task_state(struct task_struct *tsk)
+static inline unsigned int task_state_index(struct task_struct *tsk)
 {
 	unsigned int tsk_state = READ_ONCE(tsk->state);
 	unsigned int state = (tsk_state | tsk->exit_state) & TASK_REPORT;
@@ -1259,7 +1329,7 @@ static inline unsigned int __get_task_state(struct task_struct *tsk)
 	return fls(state);
 }
 
-static inline char __task_state_to_char(unsigned int state)
+static inline char task_index_to_char(unsigned int state)
 {
 	static const char state_char[] = "RSDTtXZPI";
 
@@ -1270,7 +1340,7 @@ static inline char __task_state_to_char(unsigned int state)
 
 static inline char task_state_to_char(struct task_struct *tsk)
 {
-	return __task_state_to_char(__get_task_state(tsk));
+	return task_index_to_char(task_state_index(tsk));
 }
 
 /**
@@ -1363,7 +1433,8 @@ static inline bool is_percpu_thread(void)
 #define PFA_NO_NEW_PRIVS		0	/* May not gain new privileges. */
 #define PFA_SPREAD_PAGE			1	/* Spread page cache over cpuset */
 #define PFA_SPREAD_SLAB			2	/* Spread some slab caches over cpuset */
-
+#define PFA_SPEC_SSB_DISABLE		3	/* Speculative Store Bypass disabled */
+#define PFA_SPEC_SSB_FORCE_DISABLE	4	/* Speculative Store Bypass force disabled*/
 
 #define TASK_PFA_TEST(name, func)					\
 	static inline bool task_##func(struct task_struct *p)		\
@@ -1387,6 +1458,13 @@ TASK_PFA_CLEAR(SPREAD_PAGE, spread_page)
 TASK_PFA_TEST(SPREAD_SLAB, spread_slab)
 TASK_PFA_SET(SPREAD_SLAB, spread_slab)
 TASK_PFA_CLEAR(SPREAD_SLAB, spread_slab)
+
+TASK_PFA_TEST(SPEC_SSB_DISABLE, spec_ssb_disable)
+TASK_PFA_SET(SPEC_SSB_DISABLE, spec_ssb_disable)
+TASK_PFA_CLEAR(SPEC_SSB_DISABLE, spec_ssb_disable)
+
+TASK_PFA_TEST(SPEC_SSB_FORCE_DISABLE, spec_ssb_force_disable)
+TASK_PFA_SET(SPEC_SSB_FORCE_DISABLE, spec_ssb_force_disable)
 
 static inline void
 current_restore_flags(unsigned long orig_flags, unsigned long flags)
@@ -1437,6 +1515,7 @@ extern int idle_cpu(int cpu);
 extern int sched_setscheduler(struct task_struct *, int, const struct sched_param *);
 extern int sched_setscheduler_nocheck(struct task_struct *, int, const struct sched_param *);
 extern int sched_setattr(struct task_struct *, const struct sched_attr *);
+extern int sched_setattr_nocheck(struct task_struct *, const struct sched_attr *);
 extern struct task_struct *idle_task(int cpu);
 
 /**
@@ -1456,11 +1535,20 @@ extern void ia64_set_curr_task(int cpu, struct task_struct *p);
 void yield(void);
 
 union thread_union {
+#ifndef CONFIG_ARCH_TASK_STRUCT_ON_STACK
+	struct task_struct task;
+#endif
 #ifndef CONFIG_THREAD_INFO_IN_TASK
 	struct thread_info thread_info;
 #endif
 	unsigned long stack[THREAD_SIZE/sizeof(long)];
 };
+
+#ifndef CONFIG_THREAD_INFO_IN_TASK
+extern struct thread_info init_thread_info;
+#endif
+
+extern unsigned long init_stack[THREAD_SIZE / sizeof(unsigned long)];
 
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 static inline struct thread_info *task_thread_info(struct task_struct *task)
@@ -1485,6 +1573,11 @@ static inline struct thread_info *task_thread_info(struct task_struct *task)
 extern struct task_struct *find_task_by_vpid(pid_t nr);
 extern struct task_struct *find_task_by_pid_ns(pid_t nr, struct pid_namespace *ns);
 
+/*
+ * find a task by its virtual pid and get the task struct
+ */
+extern struct task_struct *find_get_task_by_vpid(pid_t nr);
+
 extern int wake_up_state(struct task_struct *tsk, unsigned int state);
 extern int wake_up_process(struct task_struct *tsk);
 extern void wake_up_new_task(struct task_struct *tsk);
@@ -1502,7 +1595,11 @@ static inline void set_task_comm(struct task_struct *tsk, const char *from)
 	__set_task_comm(tsk, from, false);
 }
 
-extern char *get_task_comm(char *to, struct task_struct *tsk);
+extern char *__get_task_comm(char *to, size_t len, struct task_struct *tsk);
+#define get_task_comm(buf, tsk) ({			\
+	BUILD_BUG_ON(sizeof(buf) != TASK_COMM_LEN);	\
+	__get_task_comm(buf, sizeof(buf), tsk);		\
+})
 
 #ifdef CONFIG_SMP
 void scheduler_ipi(void);

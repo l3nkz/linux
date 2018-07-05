@@ -207,16 +207,15 @@ static int tracepoint_add_func(struct tracepoint *tp,
 			lockdep_is_held(&tracepoints_mutex));
 	old = func_add(&tp_funcs, func, prio);
 	if (IS_ERR(old)) {
-		WARN_ON_ONCE(1);
+		WARN_ON_ONCE(PTR_ERR(old) != -ENOMEM);
 		return PTR_ERR(old);
 	}
 
 	/*
-	 * rcu_assign_pointer has a smp_wmb() which makes sure that the new
-	 * probe callbacks array is consistent before setting a pointer to it.
-	 * This array is referenced by __DO_TRACE from
-	 * include/linux/tracepoints.h. A matching smp_read_barrier_depends()
-	 * is used.
+	 * rcu_assign_pointer has as smp_store_release() which makes sure
+	 * that the new probe callbacks array is consistent before setting
+	 * a pointer to it.  This array is referenced by __DO_TRACE from
+	 * include/linux/tracepoint.h using rcu_dereference_sched().
 	 */
 	rcu_assign_pointer(tp->funcs, tp_funcs);
 	if (!static_key_enabled(&tp->key))
@@ -240,7 +239,7 @@ static int tracepoint_remove_func(struct tracepoint *tp,
 			lockdep_is_held(&tracepoints_mutex));
 	old = func_remove(&tp_funcs, func);
 	if (IS_ERR(old)) {
-		WARN_ON_ONCE(1);
+		WARN_ON_ONCE(PTR_ERR(old) != -ENOMEM);
 		return PTR_ERR(old);
 	}
 

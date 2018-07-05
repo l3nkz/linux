@@ -148,6 +148,7 @@ struct thermal_cooling_device {
 	struct device device;
 	struct device_node *np;
 	void *devdata;
+	void *stats;
 	const struct thermal_cooling_device_ops *ops;
 	bool updated; /* true if the cooling device does not need update */
 	struct mutex lock; /* protect thermal_instances list */
@@ -488,7 +489,7 @@ static inline int power_actor_set_power(struct thermal_cooling_device *cdev,
 static inline struct thermal_zone_device *thermal_zone_device_register(
 	const char *type, int trips, int mask, void *devdata,
 	struct thermal_zone_device_ops *ops,
-	const struct thermal_zone_params *tzp,
+	struct thermal_zone_params *tzp,
 	int passive_delay, int polling_delay)
 { return ERR_PTR(-ENODEV); }
 static inline void thermal_zone_device_unregister(

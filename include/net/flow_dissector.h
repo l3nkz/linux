@@ -84,11 +84,11 @@ struct flow_dissector_key_ipv6_addrs {
 };
 
 /**
- * struct flow_dissector_key_tipc_addrs:
- * @srcnode: source node address
+ * struct flow_dissector_key_tipc:
+ * @key: source node address combined with selector
  */
-struct flow_dissector_key_tipc_addrs {
-	__be32 srcnode;
+struct flow_dissector_key_tipc {
+	__be32 key;
 };
 
 /**
@@ -100,7 +100,7 @@ struct flow_dissector_key_addrs {
 	union {
 		struct flow_dissector_key_ipv4_addrs v4addrs;
 		struct flow_dissector_key_ipv6_addrs v6addrs;
-		struct flow_dissector_key_tipc_addrs tipcaddrs;
+		struct flow_dissector_key_tipc tipckey;
 	};
 };
 
@@ -192,7 +192,7 @@ enum flow_dissector_key_id {
 	FLOW_DISSECTOR_KEY_PORTS, /* struct flow_dissector_key_ports */
 	FLOW_DISSECTOR_KEY_ICMP, /* struct flow_dissector_key_icmp */
 	FLOW_DISSECTOR_KEY_ETH_ADDRS, /* struct flow_dissector_key_eth_addrs */
-	FLOW_DISSECTOR_KEY_TIPC_ADDRS, /* struct flow_dissector_key_tipc_addrs */
+	FLOW_DISSECTOR_KEY_TIPC, /* struct flow_dissector_key_tipc */
 	FLOW_DISSECTOR_KEY_ARP, /* struct flow_dissector_key_arp */
 	FLOW_DISSECTOR_KEY_VLAN, /* struct flow_dissector_key_flow_vlan */
 	FLOW_DISSECTOR_KEY_FLOW_LABEL, /* struct flow_dissector_key_flow_tags */
@@ -251,7 +251,7 @@ extern struct flow_dissector flow_keys_buf_dissector;
  * This structure is used to hold a digest of the full flow keys. This is a
  * larger "hash" of a flow to allow definitively matching specific flows where
  * the 32 bit skb->hash is not large enough. The size is limited to 16 bytes so
- * that it can by used in CB of skb (see sch_choke for an example).
+ * that it can be used in CB of skb (see sch_choke for an example).
  */
 #define FLOW_KEYS_DIGEST_LEN	16
 struct flow_keys_digest {

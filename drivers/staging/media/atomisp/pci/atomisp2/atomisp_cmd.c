@@ -14,10 +14,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
  *
  */
 #include <linux/firmware.h>
@@ -27,7 +23,8 @@
 #include <linux/kfifo.h>
 #include <linux/pm_runtime.h>
 #include <linux/timer.h>
-#include <asm/intel-mid.h>
+
+#include <asm/iosf_mbi.h>
 
 #include <media/v4l2-event.h>
 #include <media/videobuf-vmalloc.h>
@@ -143,36 +140,36 @@ static int write_target_freq_to_hw(struct atomisp_device *isp,
 	unsigned int ratio, timeout, guar_ratio;
 	u32 isp_sspm1 = 0;
 	int i;
+
 	if (!isp->hpll_freq) {
 		dev_err(isp->dev, "failed to get hpll_freq. no change to freq\n");
 		return -EINVAL;
 	}
 
-	isp_sspm1 = intel_mid_msgbus_read32(PUNIT_PORT, ISPSSPM1);
+	iosf_mbi_read(BT_MBI_UNIT_PMC, MBI_REG_READ, ISPSSPM1, &isp_sspm1);
 	if (isp_sspm1 & ISP_FREQ_VALID_MASK) {
 		dev_dbg(isp->dev, "clearing ISPSSPM1 valid bit.\n");
-		intel_mid_msgbus_write32(PUNIT_PORT, ISPSSPM1,
+		iosf_mbi_write(BT_MBI_UNIT_PMC, MBI_REG_WRITE, ISPSSPM1,
 				    isp_sspm1 & ~(1 << ISP_FREQ_VALID_OFFSET));
 	}
 
 	ratio = (2 * isp->hpll_freq + new_freq / 2) / new_freq - 1;
 	guar_ratio = (2 * isp->hpll_freq + 200 / 2) / 200 - 1;
 
-	isp_sspm1 = intel_mid_msgbus_read32(PUNIT_PORT, ISPSSPM1);
+	iosf_mbi_read(BT_MBI_UNIT_PMC, MBI_REG_READ, ISPSSPM1, &isp_sspm1);
 	isp_sspm1 &= ~(0x1F << ISP_REQ_FREQ_OFFSET);
 
 	for (i = 0; i < ISP_DFS_TRY_TIMES; i++) {
-		intel_mid_msgbus_write32(PUNIT_PORT, ISPSSPM1,
+		iosf_mbi_write(BT_MBI_UNIT_PMC, MBI_REG_WRITE, ISPSSPM1,
 				   isp_sspm1
 				   | ratio << ISP_REQ_FREQ_OFFSET
 				   | 1 << ISP_FREQ_VALID_OFFSET
 				   | guar_ratio << ISP_REQ_GUAR_FREQ_OFFSET);
 
-		isp_sspm1 = intel_mid_msgbus_read32(PUNIT_PORT, ISPSSPM1);
-
+		iosf_mbi_read(BT_MBI_UNIT_PMC, MBI_REG_READ, ISPSSPM1, &isp_sspm1);
 		timeout = 20;
 		while ((isp_sspm1 & ISP_FREQ_VALID_MASK) && timeout) {
-			isp_sspm1 = intel_mid_msgbus_read32(PUNIT_PORT, ISPSSPM1);
+			iosf_mbi_read(BT_MBI_UNIT_PMC, MBI_REG_READ, ISPSSPM1, &isp_sspm1);
 			dev_dbg(isp->dev, "waiting for ISPSSPM1 valid bit to be 0.\n");
 			udelay(100);
 			timeout--;
@@ -187,10 +184,10 @@ static int write_target_freq_to_hw(struct atomisp_device *isp,
 		return -EINVAL;
 	}
 
-	isp_sspm1 = intel_mid_msgbus_read32(PUNIT_PORT, ISPSSPM1);
+	iosf_mbi_read(BT_MBI_UNIT_PMC, MBI_REG_READ, ISPSSPM1, &isp_sspm1);
 	timeout = 10;
 	while (((isp_sspm1 >> ISP_FREQ_STAT_OFFSET) != ratio) && timeout) {
-		isp_sspm1 = intel_mid_msgbus_read32(PUNIT_PORT, ISPSSPM1);
+		iosf_mbi_read(BT_MBI_UNIT_PMC, MBI_REG_READ, ISPSSPM1, &isp_sspm1);
 		dev_dbg(isp->dev, "waiting for ISPSSPM1 status bit to be 0x%x.\n",
 			new_freq);
 		udelay(100);
@@ -440,7 +437,7 @@ static void atomisp_reset_event(struct atomisp_sub_device *asd)
 }
 
 
-static void print_csi_rx_errors(enum ia_css_csi2_port port,
+static void print_csi_rx_errors(enum mipi_port_id port,
 				struct atomisp_device *isp)
 {
 	u32 infos = 0;
@@ -484,7 +481,7 @@ static void clear_irq_reg(struct atomisp_device *isp)
 }
 
 static struct atomisp_sub_device *
-__get_asd_from_port(struct atomisp_device *isp, mipi_port_ID_t port)
+__get_asd_from_port(struct atomisp_device *isp, enum mipi_port_id port)
 {
 	int i;
 
@@ -518,7 +515,7 @@ irqreturn_t atomisp_isr(int irq, void *dev)
 
 	spin_lock_irqsave(&isp->lock, flags);
 	if (isp->sw_contex.power_state != ATOM_ISP_POWER_UP ||
-	    isp->css_initialized == false) {
+	    !isp->css_initialized) {
 		spin_unlock_irqrestore(&isp->lock, flags);
 		return IRQ_HANDLED;
 	}
@@ -573,9 +570,9 @@ irqreturn_t atomisp_isr(int irq, void *dev)
 	    (irq_infos & CSS_IRQ_INFO_IF_ERROR)) {
 		/* handle mipi receiver error */
 		u32 rx_infos;
-		enum ia_css_csi2_port port;
+		enum mipi_port_id port;
 
-		for (port = IA_CSS_CSI2_PORT0; port <= IA_CSS_CSI2_PORT2;
+		for (port = MIPI_PORT0_ID; port <= MIPI_PORT2_ID;
 		     port++) {
 			print_csi_rx_errors(port, isp);
 			atomisp_css_rx_get_irq_info(port, &rx_infos);
@@ -1660,20 +1657,15 @@ void atomisp_css_flush(struct atomisp_device *isp)
 	dev_dbg(isp->dev, "atomisp css flush done\n");
 }
 
-#ifndef ISP2401
-void atomisp_wdt(unsigned long isp_addr)
-#else
-void atomisp_wdt(unsigned long pipe_addr)
-#endif
+void atomisp_wdt(struct timer_list *t)
 {
 #ifndef ISP2401
-	struct atomisp_device *isp = (struct atomisp_device *)isp_addr;
+	struct atomisp_sub_device *asd = from_timer(asd, t, wdt);
 #else
-	struct atomisp_video_pipe *pipe =
-		(struct atomisp_video_pipe *)pipe_addr;
+	struct atomisp_video_pipe *pipe = from_timer(pipe, t, wdt);
 	struct atomisp_sub_device *asd = pipe->asd;
-	struct atomisp_device *isp = asd->isp;
 #endif
+	struct atomisp_device *isp = asd->isp;
 
 #ifdef ISP2401
 	atomic_inc(&pipe->wdt_count);
@@ -1858,7 +1850,7 @@ irqreturn_t atomisp_isr_thread(int irq, void *isp_ptr)
 	bool frame_done_found[MAX_STREAM_NUM] = {0};
 	bool css_pipe_done[MAX_STREAM_NUM] = {0};
 	unsigned int i;
-	struct atomisp_sub_device *asd = &isp->asd[0];
+	struct atomisp_sub_device *asd;
 
 	dev_dbg(isp->dev, ">%s\n", __func__);
 
@@ -2099,7 +2091,7 @@ int atomisp_set_sensor_runmode(struct atomisp_sub_device *asd,
 	struct atomisp_device *isp = asd->isp;
 	struct v4l2_ctrl *c;
 	struct v4l2_streamparm p = {0};
-	int ret;
+	int ret = 0;
 	int modes[] = { CI_MODE_NONE,
 			CI_MODE_VIDEO,
 			CI_MODE_STILL_CAPTURE,
@@ -2113,13 +2105,8 @@ int atomisp_set_sensor_runmode(struct atomisp_sub_device *asd,
 	c = v4l2_ctrl_find(isp->inputs[asd->input_curr].camera->ctrl_handler,
 			   V4L2_CID_RUN_MODE);
 
-	if (c) {
+	if (c)
 		ret = v4l2_ctrl_s_ctrl(c, runmode->mode);
-	} else {
-		p.parm.capture.capturemode = modes[runmode->mode];
-		ret = v4l2_subdev_call(isp->inputs[asd->input_curr].camera,
-				       video, s_parm, &p);
-	}
 
 	mutex_unlock(asd->ctrl_handler.lock);
 	return ret;
@@ -4616,7 +4603,7 @@ int atomisp_fixed_pattern(struct atomisp_sub_device *asd, int flag,
 	}
 
 	if (*value == 0) {
-		asd->params.fpn_en = 0;
+		asd->params.fpn_en = false;
 		return 0;
 	}
 
@@ -5041,7 +5028,7 @@ atomisp_try_fmt_file(struct atomisp_device *isp, struct v4l2_format *f)
 	return 0;
 }
 
-mipi_port_ID_t __get_mipi_port(struct atomisp_device *isp,
+enum mipi_port_id __get_mipi_port(struct atomisp_device *isp,
 				enum atomisp_camera_port port)
 {
 	switch (port) {
@@ -5175,27 +5162,27 @@ static int __enable_continuous_mode(struct atomisp_sub_device *asd,
 	return atomisp_update_run_mode(asd);
 }
 
-int configure_pp_input_nop(struct atomisp_sub_device *asd,
-			   unsigned int width, unsigned int height)
+static int configure_pp_input_nop(struct atomisp_sub_device *asd,
+				  unsigned int width, unsigned int height)
 {
 	return 0;
 }
 
-int configure_output_nop(struct atomisp_sub_device *asd,
-			 unsigned int width, unsigned int height,
-			 unsigned int min_width,
-			 enum atomisp_css_frame_format sh_fmt)
+static int configure_output_nop(struct atomisp_sub_device *asd,
+				unsigned int width, unsigned int height,
+				unsigned int min_width,
+				enum atomisp_css_frame_format sh_fmt)
 {
 	return 0;
 }
 
-int get_frame_info_nop(struct atomisp_sub_device *asd,
-		       struct atomisp_css_frame_info *finfo)
+static int get_frame_info_nop(struct atomisp_sub_device *asd,
+			      struct atomisp_css_frame_info *finfo)
 {
 	return 0;
 }
 
-/**
+/*
  * Resets CSS parameters that depend on input resolution.
  *
  * Update params like CSS RAW binning, 2ppc mode and pp_input
@@ -5537,7 +5524,7 @@ static void atomisp_get_dis_envelop(struct atomisp_sub_device *asd,
 
 	/* if subdev type is SOC camera,we do not need to set DVS */
 	if (isp->inputs[asd->input_curr].type == SOC_CAMERA)
-		asd->params.video_dis_en = 0;
+		asd->params.video_dis_en = false;
 
 	if (asd->params.video_dis_en &&
 	    asd->run_mode->val == ATOMISP_RUN_MODE_VIDEO) {
@@ -5637,7 +5624,7 @@ static int atomisp_set_fmt_to_snr(struct video_device *vdev,
 			ffmt = req_ffmt;
 			dev_warn(isp->dev,
 			  "can not enable video dis due to sensor limitation.");
-			asd->params.video_dis_en = 0;
+			asd->params.video_dis_en = false;
 		}
 	}
 	dev_dbg(isp->dev, "sensor width: %d, height: %d\n",
@@ -5662,7 +5649,7 @@ static int atomisp_set_fmt_to_snr(struct video_device *vdev,
 	    (ffmt->width < req_ffmt->width || ffmt->height < req_ffmt->height)) {
 		dev_warn(isp->dev,
 			 "can not enable video dis due to sensor limitation.");
-		asd->params.video_dis_en = 0;
+		asd->params.video_dis_en = false;
 	}
 
 	atomisp_subdev_set_ffmt(&asd->subdev, fh.pad,
@@ -6165,7 +6152,7 @@ int atomisp_set_shading_table(struct atomisp_sub_device *asd,
 
 	if (!user_shading_table->enable) {
 		atomisp_css_set_shading_table(asd, NULL);
-		asd->params.sc_en = 0;
+		asd->params.sc_en = false;
 		return 0;
 	}
 
@@ -6203,7 +6190,7 @@ int atomisp_set_shading_table(struct atomisp_sub_device *asd,
 	free_table = asd->params.css_param.shading_table;
 	asd->params.css_param.shading_table = shading_table;
 	atomisp_css_set_shading_table(asd, shading_table);
-	asd->params.sc_en = 1;
+	asd->params.sc_en = true;
 
 out:
 	if (free_table != NULL)
@@ -6640,7 +6627,7 @@ int atomisp_inject_a_fake_event(struct atomisp_sub_device *asd, int *event)
 	return 0;
 }
 
-int atomisp_get_pipe_id(struct atomisp_video_pipe *pipe)
+static int atomisp_get_pipe_id(struct atomisp_video_pipe *pipe)
 {
 	struct atomisp_sub_device *asd = pipe->asd;
 

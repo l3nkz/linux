@@ -1339,7 +1339,7 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 	 * Ensure that EXIT_ZOMBIE -> EXIT_DEAD/EXIT_TRACE transition
 	 * can't confuse the checks below.
 	 */
-	int exit_state = ACCESS_ONCE(p->exit_state);
+	int exit_state = READ_ONCE(p->exit_state);
 	int ret;
 
 	if (unlikely(exit_state == EXIT_DEAD))
@@ -1691,7 +1691,7 @@ SYSCALL_DEFINE4(wait4, pid_t, upid, int __user *, stat_addr,
  */
 SYSCALL_DEFINE3(waitpid, pid_t, pid, int __user *, stat_addr, int, options)
 {
-	return sys_wait4(pid, stat_addr, options, NULL);
+	return kernel_wait4(pid, stat_addr, options, NULL);
 }
 
 #endif
@@ -1755,3 +1755,12 @@ Efault:
 	return -EFAULT;
 }
 #endif
+
+__weak void abort(void)
+{
+	BUG();
+
+	/* if that doesn't kill us, halt */
+	panic("Oops failed to kill thread");
+}
+EXPORT_SYMBOL(abort);

@@ -779,8 +779,14 @@ static int spi_map_buf(struct spi_controller *ctlr, struct device *dev,
 	for (i = 0; i < sgs; i++) {
 
 		if (vmalloced_buf || kmap_buf) {
-			min = min_t(size_t,
-				    len, desc_len - offset_in_page(buf));
+			/*
+			 * Next scatterlist entry size is the minimum between
+			 * the desc_len and the remaining buffer length that
+			 * fits in a page.
+			 */
+			min = min_t(size_t, desc_len,
+				    min_t(size_t, len,
+					  PAGE_SIZE - offset_in_page(buf)));
 			if (vmalloced_buf)
 				vm_page = vmalloc_to_page(buf);
 			else
@@ -2200,7 +2206,7 @@ static void devm_spi_unregister(struct device *dev, void *res)
  * Context: can sleep
  *
  * Register a SPI device as with spi_register_controller() which will
- * automatically be unregister
+ * automatically be unregistered and freed.
  *
  * Return: zero on success, else a negative error code.
  */
@@ -2241,22 +2247,19 @@ static int __unregister(struct device *dev, void *null)
  * only ones directly touching chip registers.
  *
  * This must be called from context that can sleep.
+ *
+ * Note that this function also drops a reference to the controller.
  */
 void spi_unregister_controller(struct spi_controller *ctlr)
 {
 	struct spi_controller *found;
+	int id = ctlr->bus_num;
 	int dummy;
 
 	/* First make sure that this controller was ever added */
 	mutex_lock(&board_lock);
-	found = idr_find(&spi_master_idr, ctlr->bus_num);
+	found = idr_find(&spi_master_idr, id);
 	mutex_unlock(&board_lock);
-	if (found != ctlr) {
-		dev_dbg(&ctlr->dev,
-			"attempting to delete unregistered controller [%s]\n",
-			dev_name(&ctlr->dev));
-		return;
-	}
 	if (ctlr->queued) {
 		if (spi_destroy_queue(ctlr))
 			dev_err(&ctlr->dev, "queue remove failed\n");
@@ -2269,7 +2272,8 @@ void spi_unregister_controller(struct spi_controller *ctlr)
 	device_unregister(&ctlr->dev);
 	/* free bus id */
 	mutex_lock(&board_lock);
-	idr_remove(&spi_master_idr, ctlr->bus_num);
+	if (found == ctlr)
+		idr_remove(&spi_master_idr, id);
 	mutex_unlock(&board_lock);
 }
 EXPORT_SYMBOL_GPL(spi_unregister_controller);

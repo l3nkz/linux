@@ -860,11 +860,8 @@ static int edma_terminate_all(struct dma_chan *chan)
 		/* Move the cyclic channel back to default queue */
 		if (!echan->tc && echan->edesc->cyclic)
 			edma_assign_channel_eventq(echan, EVENTQ_DEFAULT);
-		/*
-		 * free the running request descriptor
-		 * since it is not in any of the vdesc lists
-		 */
-		edma_desc_free(&echan->edesc->vdesc);
+
+		vchan_terminate_vdesc(&echan->edesc->vdesc);
 		echan->edesc = NULL;
 	}
 
@@ -889,6 +886,10 @@ static int edma_slave_config(struct dma_chan *chan,
 
 	if (cfg->src_addr_width == DMA_SLAVE_BUSWIDTH_8_BYTES ||
 	    cfg->dst_addr_width == DMA_SLAVE_BUSWIDTH_8_BYTES)
+		return -EINVAL;
+
+	if (cfg->src_maxburst > chan->device->max_burst ||
+	    cfg->dst_maxburst > chan->device->max_burst)
 		return -EINVAL;
 
 	memcpy(&echan->cfg, cfg, sizeof(echan->cfg));
@@ -1868,12 +1869,18 @@ static void edma_dma_init(struct edma_cc *ecc, bool legacy_mode)
 	s_ddev->dst_addr_widths = EDMA_DMA_BUSWIDTHS;
 	s_ddev->directions |= (BIT(DMA_DEV_TO_MEM) | BIT(DMA_MEM_TO_DEV));
 	s_ddev->residue_granularity = DMA_RESIDUE_GRANULARITY_BURST;
+	s_ddev->max_burst = SZ_32K - 1; /* CIDX: 16bit signed */
 
 	s_ddev->dev = ecc->dev;
 	INIT_LIST_HEAD(&s_ddev->channels);
 
 	if (memcpy_channels) {
 		m_ddev = devm_kzalloc(ecc->dev, sizeof(*m_ddev), GFP_KERNEL);
+		if (!m_ddev) {
+			dev_warn(ecc->dev, "memcpy is disabled due to OoM\n");
+			memcpy_channels = NULL;
+			goto ch_setup;
+		}
 		ecc->dma_memcpy = m_ddev;
 
 		dma_cap_zero(m_ddev->cap_mask);
@@ -1901,6 +1908,7 @@ static void edma_dma_init(struct edma_cc *ecc, bool legacy_mode)
 		dev_info(ecc->dev, "memcpy is disabled\n");
 	}
 
+ch_setup:
 	for (i = 0; i < ecc->num_channels; i++) {
 		struct edma_chan *echan = &ecc->slave_chans[i];
 		echan->ch_num = EDMA_CTLR_CHAN(ecc->id, i);

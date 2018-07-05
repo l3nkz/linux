@@ -19,6 +19,7 @@
 #include <linux/uaccess.h>
 #include <linux/hardirq.h>
 #include <linux/kdebug.h>
+#include <linux/kprobes.h>
 #include <linux/module.h>
 #include <linux/kexec.h>
 #include <linux/bug.h>
@@ -72,7 +73,7 @@ void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long
 	printk("Function entered at [<%08lx>] from [<%08lx>]\n", where, from);
 #endif
 
-	if (in_exception_text(where))
+	if (in_entry_text(from))
 		dump_mem("", "Exception stack", frame + 4, frame + 4 + sizeof(struct pt_regs));
 }
 
@@ -417,7 +418,8 @@ void unregister_undef_hook(struct undef_hook *hook)
 	raw_spin_unlock_irqrestore(&undef_lock, flags);
 }
 
-static int call_undef_hook(struct pt_regs *regs, unsigned int instr)
+static nokprobe_inline
+int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 {
 	struct undef_hook *hook;
 	unsigned long flags;
@@ -433,7 +435,7 @@ static int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 	return fn ? fn(regs, instr) : 1;
 }
 
-asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
+asmlinkage void do_undefinstr(struct pt_regs *regs)
 {
 	unsigned int instr;
 	siginfo_t info;
@@ -490,6 +492,7 @@ die_sig:
 
 	arm_notify_die("Oops - undefined instruction", regs, &info, 0, 6);
 }
+NOKPROBE_SYMBOL(do_undefinstr)
 
 /*
  * Handle FIQ similarly to NMI on x86 systems.
@@ -655,6 +658,9 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 		set_tls(regs->ARM_r0);
 		return 0;
 
+	case NR(get_tls):
+		return current_thread_info()->tp_value[0];
+
 	default:
 		/* Calls 9f00xx..9f07ff are defined to return -ENOSYS
 		   if not implemented, rather than raising SIGILL.  This
@@ -790,7 +796,6 @@ void abort(void)
 	/* if that doesn't kill us, halt */
 	panic("Oops failed to kill thread");
 }
-EXPORT_SYMBOL(abort);
 
 void __init trap_init(void)
 {

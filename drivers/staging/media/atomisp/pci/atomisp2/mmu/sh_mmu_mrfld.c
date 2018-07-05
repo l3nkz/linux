@@ -14,14 +14,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
  *
  */
 #include "type_support.h"
 #include "mmu/isp_mmu.h"
+#include "mmu/sh_mmu_mrfld.h"
 #include "memory_access/memory_access.h"
 #include "atomisp_compat.h"
 
@@ -42,20 +39,6 @@ static phys_addr_t sh_pte_to_phys(struct isp_mmu *mmu,
 {
 	unsigned int mask = mmu->driver->pte_valid_mask;
 	return (phys_addr_t)((pte & ~mask) << ISP_PAGE_OFFSET);
-}
-
-/*
- * set page directory base address (physical address).
- *
- * must be provided.
- */
-static int sh_set_pd_base(struct isp_mmu *mmu,
-			  phys_addr_t phys)
-{
-	unsigned int pte = sh_phys_to_pte(mmu, phys);
-	/*mmgr_set_base_address(HOST_ADDRESS(pte));*/
-	atomisp_css_mmu_set_page_table_base_index(HOST_ADDRESS(pte));
-	return 0;
 }
 
 static unsigned int sh_get_pd_base(struct isp_mmu *mmu,
@@ -85,7 +68,6 @@ struct isp_mmu_client sh_mmu_mrfld = {
 	.name = "Silicon Hive ISP3000 MMU",
 	.pte_valid_mask = MERR_VALID_PTE_MASK,
 	.null_pte = ~MERR_VALID_PTE_MASK,
-	.set_pd_base = sh_set_pd_base,
 	.get_pd_base = sh_get_pd_base,
 	.tlb_flush_all = sh_tlb_flush,
 	.phys_to_pte = sh_phys_to_pte,

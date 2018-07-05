@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <linux/types.h>
+#include "rwsem.h"
 
 enum map_type {
 	MAP__FUNCTION = 0,
@@ -62,7 +63,7 @@ struct kmap {
 
 struct maps {
 	struct rb_root	 entries;
-	pthread_rwlock_t lock;
+	struct rw_semaphore lock;
 };
 
 struct map_groups {
@@ -102,6 +103,10 @@ static inline u64 identity__map_ip(struct map *map __maybe_unused, u64 ip)
 	return ip;
 }
 
+static inline size_t map__size(const struct map *map)
+{
+	return map->end - map->start;
+}
 
 /* rip/ip <-> addr suitable for passing to `objdump --start-address=` */
 u64 map__rip_2objdump(struct map *map, u64 rip);

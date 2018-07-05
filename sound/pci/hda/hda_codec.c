@@ -977,7 +977,7 @@ int snd_hda_codec_update_widgets(struct hda_codec *codec)
 	hda_nid_t fg;
 	int err;
 
-	err = snd_hdac_refresh_widget_sysfs(&codec->core);
+	err = snd_hdac_refresh_widgets(&codec->core, true);
 	if (err < 0)
 		return err;
 
@@ -1823,7 +1823,9 @@ struct slave_init_arg {
 };
 
 /* initialize the slave volume with 0dB via snd_ctl_apply_vmaster_slaves() */
-static int init_slave_0dB(struct snd_kcontrol *kctl, void *_arg)
+static int init_slave_0dB(struct snd_kcontrol *slave,
+			  struct snd_kcontrol *kctl,
+			  void *_arg)
 {
 	struct slave_init_arg *arg = _arg;
 	int _tlv[4];
@@ -1860,7 +1862,7 @@ static int init_slave_0dB(struct snd_kcontrol *kctl, void *_arg)
 	arg->step = step;
 	val = -tlv[2] / step;
 	if (val > 0) {
-		put_kctl_with_value(kctl, val);
+		put_kctl_with_value(slave, val);
 		return val;
 	}
 
@@ -1868,7 +1870,9 @@ static int init_slave_0dB(struct snd_kcontrol *kctl, void *_arg)
 }
 
 /* unmute the slave via snd_ctl_apply_vmaster_slaves() */
-static int init_slave_unmute(struct snd_kcontrol *slave, void *_arg)
+static int init_slave_unmute(struct snd_kcontrol *slave,
+			     struct snd_kcontrol *kctl,
+			     void *_arg)
 {
 	return put_kctl_with_value(slave, 1);
 }
@@ -2698,32 +2702,6 @@ void snd_hda_codec_set_power_to_all(struct hda_codec *codec, hda_nid_t fg,
 }
 EXPORT_SYMBOL_GPL(snd_hda_codec_set_power_to_all);
 
-/*
- * wait until the state is reached, returns the current state
- */
-static unsigned int hda_sync_power_state(struct hda_codec *codec,
-					 hda_nid_t fg,
-					 unsigned int power_state)
-{
-	unsigned long end_time = jiffies + msecs_to_jiffies(500);
-	unsigned int state, actual_state;
-
-	for (;;) {
-		state = snd_hda_codec_read(codec, fg, 0,
-					   AC_VERB_GET_POWER_STATE, 0);
-		if (state & AC_PWRST_ERROR)
-			break;
-		actual_state = (state >> 4) & 0x0f;
-		if (actual_state == power_state)
-			break;
-		if (time_after_eq(jiffies, end_time))
-			break;
-		/* wait until the codec reachs to the target state */
-		msleep(1);
-	}
-	return state;
-}
-
 /**
  * snd_hda_codec_eapd_power_filter - A power filter callback for EAPD
  * @codec: the HDA codec
@@ -2786,7 +2764,7 @@ static unsigned int hda_set_power_state(struct hda_codec *codec,
 						   state);
 			snd_hda_codec_set_power_to_all(codec, fg, power_state);
 		}
-		state = hda_sync_power_state(codec, fg, power_state);
+		state = snd_hda_sync_power_state(codec, fg, power_state);
 		if (!(state & AC_PWRST_ERROR))
 			break;
 	}

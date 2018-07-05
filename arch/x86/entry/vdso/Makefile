@@ -42,9 +42,7 @@ vdso_img_cfiles := $(vdso_img-y:%=vdso-image-%.c)
 vdso_img_sodbg := $(vdso_img-y:%=vdso%.so.dbg)
 obj-y += $(vdso_img_objs)
 targets += $(vdso_img_cfiles)
-targets += $(vdso_img_sodbg)
-.SECONDARY: $(vdso_img-y:%=$(obj)/vdso-image-%.c) \
-	$(vdso_img-y:%=$(obj)/vdso%.so)
+targets += $(vdso_img_sodbg) $(vdso_img-y:%=vdso%.so)
 
 export CPPFLAGS_vdso.lds += -P -C
 
@@ -129,10 +127,6 @@ $(obj)/vdsox32.so.dbg: $(src)/vdsox32.lds $(vobjx32s) FORCE
 
 CPPFLAGS_vdso32.lds = $(CPPFLAGS_vdso.lds)
 VDSO_LDFLAGS_vdso32.lds = -m32 -Wl,-m,elf_i386 -Wl,-soname=linux-gate.so.1
-
-# This makes sure the $(obj) subdirectory exists even though vdso32/
-# is not a kbuild sub-make subdirectory.
-override obj-dirs = $(dir $(obj)) $(obj)/vdso32/
 
 targets += vdso32/vdso32.lds
 targets += vdso32/note.o vdso32/system_call.o vdso32/sigreturn.o

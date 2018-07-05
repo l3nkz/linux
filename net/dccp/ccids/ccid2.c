@@ -126,10 +126,20 @@ static void ccid2_change_l_seq_window(struct sock *sk, u64 val)
 						  DCCPF_SEQ_WMAX));
 }
 
-static void ccid2_hc_tx_rto_expire(unsigned long data)
+static void dccp_tasklet_schedule(struct sock *sk)
 {
-	struct sock *sk = (struct sock *)data;
-	struct ccid2_hc_tx_sock *hc = ccid2_hc_tx_sk(sk);
+	struct tasklet_struct *t = &dccp_sk(sk)->dccps_xmitlet;
+
+	if (!test_and_set_bit(TASKLET_STATE_SCHED, &t->state)) {
+		sock_hold(sk);
+		__tasklet_schedule(t);
+	}
+}
+
+static void ccid2_hc_tx_rto_expire(struct timer_list *t)
+{
+	struct ccid2_hc_tx_sock *hc = from_timer(hc, t, tx_rtotimer);
+	struct sock *sk = hc->sk;
 	const bool sender_was_blocked = ccid2_cwnd_network_limited(hc);
 
 	bh_lock_sock(sk);
@@ -139,6 +149,9 @@ static void ccid2_hc_tx_rto_expire(unsigned long data)
 	}
 
 	ccid2_pr_debug("RTO_EXPIRE\n");
+
+	if (sk->sk_state == DCCP_CLOSED)
+		goto out;
 
 	/* back-off timer */
 	hc->tx_rto <<= 1;
@@ -163,7 +176,7 @@ static void ccid2_hc_tx_rto_expire(unsigned long data)
 
 	/* if we were blocked before, we may now send cwnd=1 packet */
 	if (sender_was_blocked)
-		tasklet_schedule(&dccp_sk(sk)->dccps_xmitlet);
+		dccp_tasklet_schedule(sk);
 	/* restart backed-off timer */
 	sk_reset_timer(sk, &hc->tx_rtotimer, jiffies + hc->tx_rto);
 out:
@@ -703,7 +716,7 @@ static void ccid2_hc_tx_packet_recv(struct sock *sk, struct sk_buff *skb)
 done:
 	/* check if incoming Acks allow pending packets to be sent */
 	if (sender_was_blocked && !ccid2_cwnd_network_limited(hc))
-		tasklet_schedule(&dccp_sk(sk)->dccps_xmitlet);
+		dccp_tasklet_schedule(sk);
 	dccp_ackvec_parsed_cleanup(&hc->tx_av_chunks);
 }
 
@@ -733,8 +746,8 @@ static int ccid2_hc_tx_init(struct ccid *ccid, struct sock *sk)
 	hc->tx_rpdupack  = -1;
 	hc->tx_last_cong = hc->tx_lsndtime = hc->tx_cwnd_stamp = ccid2_jiffies32;
 	hc->tx_cwnd_used = 0;
-	setup_timer(&hc->tx_rtotimer, ccid2_hc_tx_rto_expire,
-			(unsigned long)sk);
+	hc->sk		 = sk;
+	timer_setup(&hc->tx_rtotimer, ccid2_hc_tx_rto_expire, 0);
 	INIT_LIST_HEAD(&hc->tx_av_chunks);
 	return 0;
 }

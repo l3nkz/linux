@@ -42,12 +42,10 @@ xmaddr_t arbitrary_virt_to_machine(void *vaddr)
 }
 EXPORT_SYMBOL_GPL(arbitrary_virt_to_machine);
 
-static void xen_flush_tlb_all(void)
+static noinline void xen_flush_tlb_all(void)
 {
 	struct mmuext_op *op;
 	struct multicall_space mcs;
-
-	trace_xen_mmu_flush_tlb_all(0);
 
 	preempt_disable();
 
@@ -172,6 +170,9 @@ int xen_remap_domain_gfn_range(struct vm_area_struct *vma,
 			       pgprot_t prot, unsigned domid,
 			       struct page **pages)
 {
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return -EOPNOTSUPP;
+
 	return do_remap_gfn(vma, addr, &gfn, nr, NULL, prot, domid, pages);
 }
 EXPORT_SYMBOL_GPL(xen_remap_domain_gfn_range);
@@ -182,6 +183,10 @@ int xen_remap_domain_gfn_array(struct vm_area_struct *vma,
 			       int *err_ptr, pgprot_t prot,
 			       unsigned domid, struct page **pages)
 {
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return xen_xlate_remap_gfn_array(vma, addr, gfn, nr, err_ptr,
+						 prot, domid, pages);
+
 	/* We BUG_ON because it's a programmer error to pass a NULL err_ptr,
 	 * and the consequences later is quite hard to detect what the actual
 	 * cause of "wrong memory was mapped in".
@@ -193,9 +198,12 @@ EXPORT_SYMBOL_GPL(xen_remap_domain_gfn_array);
 
 /* Returns: 0 success */
 int xen_unmap_domain_gfn_range(struct vm_area_struct *vma,
-			       int numpgs, struct page **pages)
+			       int nr, struct page **pages)
 {
-	if (!pages || !xen_feature(XENFEAT_auto_translated_physmap))
+	if (xen_feature(XENFEAT_auto_translated_physmap))
+		return xen_xlate_unmap_gfn_range(vma, nr, pages);
+
+	if (!pages)
 		return 0;
 
 	return -EINVAL;

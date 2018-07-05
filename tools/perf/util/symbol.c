@@ -46,6 +46,7 @@ struct symbol_conf symbol_conf = {
 	.show_hist_headers	= true,
 	.symfs			= "",
 	.event_group		= true,
+	.inline_name		= true,
 };
 
 static enum dso_binary_type binary_type_symtab[] = {
@@ -91,6 +92,11 @@ static int prefix_underscores_count(const char *str)
 		tail++;
 
 	return tail - str;
+}
+
+const char * __weak arch__normalize_symbol_name(const char *name)
+{
+	return name;
 }
 
 int __weak arch__compare_symbol_names(const char *namea, const char *nameb)
@@ -227,7 +233,7 @@ void __map_groups__fixup_end(struct map_groups *mg, enum map_type type)
 	struct maps *maps = &mg->maps[type];
 	struct map *next, *curr;
 
-	pthread_rwlock_wrlock(&maps->lock);
+	down_write(&maps->lock);
 
 	curr = maps__first(maps);
 	if (curr == NULL)
@@ -247,7 +253,7 @@ void __map_groups__fixup_end(struct map_groups *mg, enum map_type type)
 		curr->end = ~0ULL;
 
 out_unlock:
-	pthread_rwlock_unlock(&maps->lock);
+	up_write(&maps->lock);
 }
 
 struct symbol *symbol__new(u64 start, u64 len, u8 binding, const char *name)
@@ -1576,7 +1582,7 @@ int dso__load(struct dso *dso, struct map *map)
 		bool next_slot = false;
 		bool is_reg;
 		bool nsexit;
-		int sirc;
+		int sirc = -1;
 
 		enum dso_binary_type symtab_type = binary_type_symtab[i];
 
@@ -1594,16 +1600,14 @@ int dso__load(struct dso *dso, struct map *map)
 			nsinfo__mountns_exit(&nsc);
 
 		is_reg = is_regular_file(name);
-		sirc = symsrc__init(ss, dso, name, symtab_type);
+		if (is_reg)
+			sirc = symsrc__init(ss, dso, name, symtab_type);
 
 		if (nsexit)
 			nsinfo__mountns_enter(dso->nsinfo, &nsc);
 
-		if (!is_reg || sirc < 0) {
-			if (sirc >= 0)
-				symsrc__destroy(ss);
+		if (!is_reg || sirc < 0)
 			continue;
-		}
 
 		if (!syms_ss && symsrc__has_symtab(ss)) {
 			syms_ss = ss;
@@ -1672,7 +1676,7 @@ struct map *map_groups__find_by_name(struct map_groups *mg,
 	struct maps *maps = &mg->maps[type];
 	struct map *map;
 
-	pthread_rwlock_rdlock(&maps->lock);
+	down_read(&maps->lock);
 
 	for (map = maps__first(maps); map; map = map__next(map)) {
 		if (map->dso && strcmp(map->dso->short_name, name) == 0)
@@ -1682,7 +1686,7 @@ struct map *map_groups__find_by_name(struct map_groups *mg,
 	map = NULL;
 
 out_unlock:
-	pthread_rwlock_unlock(&maps->lock);
+	up_read(&maps->lock);
 	return map;
 }
 
@@ -1954,8 +1958,7 @@ static int dso__load_guest_kernel_sym(struct dso *dso, struct map *map)
 		pr_debug("Using %s for symbols\n", kallsyms_filename);
 	if (err > 0 && !dso__is_kcore(dso)) {
 		dso->binary_type = DSO_BINARY_TYPE__GUEST_KALLSYMS;
-		machine__mmap_name(machine, path, sizeof(path));
-		dso__set_long_name(dso, strdup(path), true);
+		dso__set_long_name(dso, machine->mmap_name, false);
 		map__fixup_start(map);
 		map__fixup_end(map);
 	}
@@ -2088,14 +2091,12 @@ static bool symbol__read_kptr_restrict(void)
 
 int symbol__annotation_init(void)
 {
+	if (symbol_conf.init_annotation)
+		return 0;
+
 	if (symbol_conf.initialized) {
 		pr_err("Annotation needs to be init before symbol__init()\n");
 		return -1;
-	}
-
-	if (symbol_conf.init_annotation) {
-		pr_warning("Annotation being initialized multiple times\n");
-		return 0;
 	}
 
 	symbol_conf.priv_size += sizeof(struct annotation);
@@ -2217,4 +2218,26 @@ int symbol__config_symfs(const struct option *opt __maybe_unused,
 
 	free(bf);
 	return 0;
+}
+
+struct mem_info *mem_info__get(struct mem_info *mi)
+{
+	if (mi)
+		refcount_inc(&mi->refcnt);
+	return mi;
+}
+
+void mem_info__put(struct mem_info *mi)
+{
+	if (mi && refcount_dec_and_test(&mi->refcnt))
+		free(mi);
+}
+
+struct mem_info *mem_info__new(void)
+{
+	struct mem_info *mi = zalloc(sizeof(*mi));
+
+	if (mi)
+		refcount_set(&mi->refcnt, 1);
+	return mi;
 }

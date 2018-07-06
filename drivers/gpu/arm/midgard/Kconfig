@@ -214,3 +214,4 @@ config MALI_PWRSOFT_765
 	  changes have been backported say Y to avoid compilation errors.
 
 source "drivers/gpu/arm/midgard/platform/Kconfig"
+source "drivers/gpu/arm/midgard/tests/Kconfig"

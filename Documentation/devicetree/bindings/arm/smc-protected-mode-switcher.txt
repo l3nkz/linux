@@ -19,11 +19,19 @@
 #
 #
 
-config MALI_IRQ_LATENCY
- tristate "Mali GPU IRQ latency measurement"
- depends on MALI_MIDGARD && MALI_DEBUG && MALI_KUTF
- default m
- help
-   This option will build a test module mali_kutf_irq_test that
-   can determine the latency of the Mali GPU IRQ on your system.
-   Choosing M here will generate a single module called mali_kutf_irq_test.
+* ARM SMC protected mode switcher devices
+
+Required properties :
+
+- compatible : Must be "arm,smc-protected-mode-switcher"
+- arm,smc,protected_enable : SMC call ID to enable protected mode
+- arm,smc,protected_disable : SMC call ID to disable protected mode and reset
+			      device
+
+An example node :
+
+	gpu_switcher {
+		compatible = "arm,smc-protected-mode-switcher";
+		arm,smc,protected_enable = <0xff06>;
+		arm,smc,protected_disable = <0xff07>;
+	};

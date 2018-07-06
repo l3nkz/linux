@@ -1,5 +1,5 @@
 #
-# (C) COPYRIGHT 2017 ARM Limited. All rights reserved.
+# (C) COPYRIGHT 2012 ARM Limited. All rights reserved.
 #
 # This program is free software and is provided to you under the terms of the
 # GNU General Public License version 2 as published by the Free Software
@@ -19,8 +19,20 @@
 #
 #
 
-ccflags-y += -I$(src)/../include -I$(src)/../../../ -I$(src)/../../ -I$(src)/../../backend/gpu -I$(srctree)/drivers/staging/android
+# linux build system bootstrap for out-of-tree module
 
-obj-$(CONFIG_MALI_IRQ_LATENCY) += mali_kutf_irq_test.o
+# default to building for the host
+ARCH ?= $(shell uname -m)
 
-mali_kutf_irq_test-y := mali_kutf_irq_test_main.o
+ifeq ($(KDIR),)
+$(error Must specify KDIR to point to the kernel to target))
+endif
+
+all: dma_buf_lock
+
+dma_buf_lock:
+	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(CURDIR) EXTRA_CFLAGS="-I$(CURDIR)/../../../../include"
+
+clean:
+	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(CURDIR) clean
+

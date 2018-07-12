@@ -20,34 +20,9 @@
 &i2c_0 {
 	status = "okay";
 	clock-frequency = <400000>;
-	/* A15 cluster: VDD_ARM 
-	ina231@40 {
-		compatible = "ti,ina231";
-		reg = <0x40>;
-		shunt-resistor = <10000>;
-	};*/
 
-	/* memory: VDD_MEM 
-	ina231@41 {
-		compatible = "ti,ina231";
-		reg = <0x41>;
-		shunt-resistor = <10000>;
-	};*/
-
-	/* GPU: VDD_G3D 
-	ina231@44 {
-		compatible = "ti,ina231";
-		reg = <0x44>;
-		shunt-resistor = <10000>;
-	};*/
-
-	/* A7 cluster: VDD_KFC 
-	ina231@45 {
-		compatible = "ti,ina231";
-		reg = <0x45>;
-		shunt-resistor = <10000>;
-	};*/
-
+	/* Energy sensors on the XU3 */
+	/* A15 cluster sensor */
         ina231@40  {
                 compatible = "hardkernel,INA231";
                 reg = <0x40>;
@@ -58,6 +33,8 @@
                 config = <0x45FF>;
                 update_period = <263808>;
         };
+
+	/* memory sensor */
         ina231@41  {
                 compatible = "hardkernel,INA231";
                 reg = <0x41>;
@@ -68,6 +45,8 @@
                 config = <0x45FF>;
                 update_period = <263808>;
         };
+
+	/* GPU sensor */
         ina231@44  {
                 compatible = "hardkernel,INA231";
                 reg = <0x44>;
@@ -78,6 +57,8 @@
                 config = <0x45FF>;
                 update_period = <263808>;
         };
+
+	/* A7 cluster sensor */
         ina231@45  {
                 compatible = "hardkernel,INA231";
                 reg = <0x45>;
@@ -88,7 +69,160 @@
                 config = <0x45FF>;
                 update_period = <263808>;
         };
+};
 
+/* Add additional operation points to the A15 and A7 clusters */
+&cluster_a15_opp_table {
+	opp-2000000000 {
+		opp-hz = /bits/64 <2000000000>;
+		opp-microvolt = <1312500>;
+		clock-latency-ns = <140000>;
+	};
+	opp-1900000000 {
+		opp-hz = /bits/64 <1900000000>;
+		opp-microvolt = <1250000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-1800000000 {
+		opp-microvolt = <1200000>;
+	};
+	opp-1700000000 {
+		opp-microvolt = <1162500>;
+	};
+	opp-1600000000 {
+		opp-microvolt = <1122000>;
+	};
+	opp-1500000000 {
+		opp-microvolt = <1087500>;
+	};
+	opp-1400000000 {
+		opp-microvolt = <1062500>;
+	};
+	opp-1300000000 {
+		opp-microvolt = <1050000>;
+	};
+	opp-1200000000 {
+		opp-microvolt = <1025000>;
+	};
+	opp-1100000000 {
+		opp-microvolt = <1000000>;
+	};
+	opp-1000000000 {
+		opp-microvolt = <975000>;
+	};
+	opp-900000000 {
+		opp-microvolt = <950000>;
+	};
+	opp-800000000 {
+		opp-microvolt = <925000>;
+	};
+	opp-700000000 {
+		opp-microvolt = <900000>;
+	};
+	opp-600000000 {
+		opp-hz = /bits/ 64 <600000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-500000000 {
+		opp-hz = /bits/ 64 <500000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-400000000 {
+		opp-hz = /bits/ 64 <400000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-300000000 {
+		opp-hz = /bits/ 64 <300000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-200000000 {
+		opp-hz = /bits/ 64 <200000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+};
+
+&cluster_a7_opp_table {
+	opp-1400000000 {
+		opp-hz = /bits/ 64 <1400000000>;
+		opp-microvolt = <1275000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-1300000000 {
+		opp-microvolt = <1225000>;
+	};
+	opp-1200000000 {
+		opp-microvolt = <1175000>;
+	};
+	opp-1100000000 {
+		opp-microvolt = <1135000>;
+	};
+	opp-1000000000 {
+		opp-microvolt = <1100000>;
+	};
+	opp-900000000 {
+		opp-microvolt = <1062500>;
+	};
+	opp-800000000 {
+		opp-microvolt = <1025000>;
+	};
+	opp-700000000 {
+		opp-microvolt = <987500>;
+	};
+	opp-600000000 {
+		opp-microvolt = <950000>;
+	};
+	opp-500000000 {
+		opp-microvolt = <900000>;
+	};
+	opp-400000000 {
+		opp-microvolt = <900000>;
+	};
+	opp-300000000 {
+		opp-hz = /bits/ 64 <300000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+	opp-200000000 {
+		opp-hz = /bits/ 64 <200000000>;
+		opp-microvolt = <900000>;
+		clock-latency-ns = <140000>;
+	};
+};
+
+/* Use the new maximal frequencies for the CPUs */
+&cpu0 {
+	clock-frequency = <1400000000>;
+};
+&cpu1 {
+	clock-frequency = <1400000000>;
+};
+&cpu2 {
+	clock-frequency = <1400000000>;
+};
+&cpu3 {
+	clock-frequency = <1400000000>;
+};
+&cpu4 {
+	clock-frequency = <2000000000>;
+};
+&cpu5 {
+	clock-frequency = <2000000000>;
+};
+&cpu6 {
+	clock-frequency = <2000000000>;
+};
+&cpu7 {
+	clock-frequency = <2000000000>;
+};
+
+/* Final setup of the mali device */
+&mali {
+        mali-supply = <&buck4_reg>;
 };
 
 &pwm {

@@ -46,16 +46,6 @@
 		cluster_a15_opp_table: opp_table0 {
 			compatible = "operating-points-v2";
 			opp-shared;
-			opp-2000000000 {
-				opp-hz = /bits/ 64 <2000000000>;
-				opp-microvolt = <1250000>;
-				clock-latency-ns = <140000>;
-			};
-			opp-1900000000 {
-				opp-hz = /bits/ 64 <1900000000>;
-				opp-microvolt = <1250000>;
-				clock-latency-ns = <140000>;
-			};
 			opp-1800000000 {
 				opp-hz = /bits/ 64 <1800000000>;
 				opp-microvolt = <1250000>;
@@ -121,11 +111,6 @@
 		cluster_a7_opp_table: opp_table1 {
 			compatible = "operating-points-v2";
 			opp-shared;
-			opp-1400000000 {
-				opp-hz = /bits/ 64 <1400000000>;
-				opp-microvolt = <1275000>;
-				clock-latency-ns = <140000>;
-			};
 			opp-1300000000 {
 				opp-hz = /bits/ 64 <1300000000>;
 				opp-microvolt = <1275000>;

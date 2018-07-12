@@ -404,27 +404,22 @@
 
 &tmu_cpu0 {
 	vtmu-supply = <&ldo7_reg>;
-	status = "okay";
 };
 
 &tmu_cpu1 {
 	vtmu-supply = <&ldo7_reg>;
-	status = "okay";
 };
 
 &tmu_cpu2 {
 	vtmu-supply = <&ldo7_reg>;
-	status = "okay";
 };
 
 &tmu_cpu3 {
 	vtmu-supply = <&ldo7_reg>;
-	status = "okay";
 };
 
 &tmu_gpu {
 	vtmu-supply = <&ldo7_reg>;
-	status = "okay";
 };
 
 &rtc {
@@ -447,9 +442,4 @@
 &usbdrd3_1 {
 	vdd33-supply = <&ldo9_reg>;
 	vdd10-supply = <&ldo11_reg>;
-};
-
-&mali {
-        mali-supply = <&buck4_reg>;
-        status = "okay";
 };

@@ -274,7 +274,6 @@ static unsigned int ir_update_mapping(struct rc_dev *dev,
 				      unsigned int new_keycode)
 {
 	int old_keycode = rc_map->scan[index].keycode;
-	int i;
 
 	/* Did the user wish to remove the mapping? */
 	if (new_keycode == KEY_RESERVED || new_keycode == KEY_UNKNOWN) {
@@ -289,20 +288,9 @@ static unsigned int ir_update_mapping(struct rc_dev *dev,
 			old_keycode == KEY_RESERVED ? "New" : "Replacing",
 			rc_map->scan[index].scancode, new_keycode);
 		rc_map->scan[index].keycode = new_keycode;
-		__set_bit(new_keycode, dev->input_dev->keybit);
 	}
 
 	if (old_keycode != KEY_RESERVED) {
-		/* A previous mapping was updated... */
-		__clear_bit(old_keycode, dev->input_dev->keybit);
-		/* ... but another scancode might use the same keycode */
-		for (i = 0; i < rc_map->len; i++) {
-			if (rc_map->scan[i].keycode == old_keycode) {
-				__set_bit(old_keycode, dev->input_dev->keybit);
-				break;
-			}
-		}
-
 		/* Possibly shrink the keytable, failure is not a problem */
 		ir_resize_table(dev, rc_map, GFP_ATOMIC);
 	}
@@ -679,6 +667,14 @@ static void ir_timer_repeat(struct timer_list *t)
 	spin_unlock_irqrestore(&dev->keylock, flags);
 }
 
+static unsigned int repeat_period(int protocol)
+{
+	if (protocol >= ARRAY_SIZE(protocols))
+		return 100;
+
+	return protocols[protocol].repeat_period;
+}
+
 /**
  * rc_repeat() - signals that a key is still pressed
  * @dev:	the struct rc_dev descriptor of the device
@@ -691,7 +687,7 @@ void rc_repeat(struct rc_dev *dev)
 {
 	unsigned long flags;
 	unsigned int timeout = nsecs_to_jiffies(dev->timeout) +
-		msecs_to_jiffies(protocols[dev->last_protocol].repeat_period);
+		msecs_to_jiffies(repeat_period(dev->last_protocol));
 	struct lirc_scancode sc = {
 		.scancode = dev->last_scancode, .rc_proto = dev->last_protocol,
 		.keycode = dev->keypressed ? dev->last_keycode : KEY_RESERVED,
@@ -699,7 +695,8 @@ void rc_repeat(struct rc_dev *dev)
 			 (dev->last_toggle ? LIRC_SCANCODE_FLAG_TOGGLE : 0)
 	};
 
-	ir_lirc_scancode_event(dev, &sc);
+	if (dev->allowed_protocols != RC_PROTO_BIT_CEC)
+		ir_lirc_scancode_event(dev, &sc);
 
 	spin_lock_irqsave(&dev->keylock, flags);
 
@@ -739,7 +736,8 @@ static void ir_do_keydown(struct rc_dev *dev, enum rc_proto protocol,
 		.keycode = keycode
 	};
 
-	ir_lirc_scancode_event(dev, &sc);
+	if (dev->allowed_protocols != RC_PROTO_BIT_CEC)
+		ir_lirc_scancode_event(dev, &sc);
 
 	if (new_event && dev->keypressed)
 		ir_do_keyup(dev, false);
@@ -803,7 +801,7 @@ void rc_keydown(struct rc_dev *dev, enum rc_proto protocol, u32 scancode,
 
 	if (dev->keypressed) {
 		dev->keyup_jiffies = jiffies + nsecs_to_jiffies(dev->timeout) +
-			msecs_to_jiffies(protocols[protocol].repeat_period);
+			msecs_to_jiffies(repeat_period(protocol));
 		mod_timer(&dev->timer_keyup, dev->keyup_jiffies);
 	}
 	spin_unlock_irqrestore(&dev->keylock, flags);
@@ -1747,10 +1745,18 @@ static int rc_prepare_rx_device(struct rc_dev *dev)
 		dev->enabled_protocols = rc_proto;
 	}
 
+	/* Keyboard events */
 	set_bit(EV_KEY, dev->input_dev->evbit);
 	set_bit(EV_REP, dev->input_dev->evbit);
 	set_bit(EV_MSC, dev->input_dev->evbit);
 	set_bit(MSC_SCAN, dev->input_dev->mscbit);
+	bitmap_fill(dev->input_dev->keybit, KEY_CNT);
+
+	/* Pointer/mouse events */
+	set_bit(EV_REL, dev->input_dev->evbit);
+	set_bit(REL_X, dev->input_dev->relbit);
+	set_bit(REL_Y, dev->input_dev->relbit);
+
 	if (dev->open)
 		dev->input_dev->open = ir_open;
 	if (dev->close)
@@ -1946,6 +1952,8 @@ void rc_unregister_device(struct rc_dev *dev)
 	rc_free_rx_device(dev);
 
 	mutex_lock(&dev->lock);
+	if (dev->users && dev->close)
+		dev->close(dev);
 	dev->registered = false;
 	mutex_unlock(&dev->lock);
 

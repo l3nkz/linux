@@ -484,18 +484,21 @@ static void _rtl_init_deferred_work(struct ieee80211_hw *hw)
 
 }
 
-void rtl_deinit_deferred_work(struct ieee80211_hw *hw)
+void rtl_deinit_deferred_work(struct ieee80211_hw *hw, bool ips_wq)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
 	del_timer_sync(&rtlpriv->works.watchdog_timer);
 
-	cancel_delayed_work(&rtlpriv->works.watchdog_wq);
-	cancel_delayed_work(&rtlpriv->works.ips_nic_off_wq);
-	cancel_delayed_work(&rtlpriv->works.ps_work);
-	cancel_delayed_work(&rtlpriv->works.ps_rfon_wq);
-	cancel_delayed_work(&rtlpriv->works.fwevt_wq);
-	cancel_delayed_work(&rtlpriv->works.c2hcmd_wq);
+	cancel_delayed_work_sync(&rtlpriv->works.watchdog_wq);
+	if (ips_wq)
+		cancel_delayed_work(&rtlpriv->works.ips_nic_off_wq);
+	else
+		cancel_delayed_work_sync(&rtlpriv->works.ips_nic_off_wq);
+	cancel_delayed_work_sync(&rtlpriv->works.ps_work);
+	cancel_delayed_work_sync(&rtlpriv->works.ps_rfon_wq);
+	cancel_delayed_work_sync(&rtlpriv->works.fwevt_wq);
+	cancel_delayed_work_sync(&rtlpriv->works.c2hcmd_wq);
 }
 EXPORT_SYMBOL_GPL(rtl_deinit_deferred_work);
 
@@ -1904,7 +1907,7 @@ void rtl_rx_ampdu_apply(struct rtl_priv *rtlpriv)
 		 reject_agg, ctrl_agg_size, agg_size);
 
 	rtlpriv->hw->max_rx_aggregation_subframes =
-		(ctrl_agg_size ? agg_size : IEEE80211_MAX_AMPDU_BUF);
+		(ctrl_agg_size ? agg_size : IEEE80211_MAX_AMPDU_BUF_HT);
 }
 EXPORT_SYMBOL(rtl_rx_ampdu_apply);
 
@@ -2286,6 +2289,7 @@ void rtl_c2hcmd_enqueue(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	if (rtl_c2h_fast_cmd(hw, skb)) {
 		rtl_c2h_content_parsing(hw, skb);
+		kfree_skb(skb);
 		return;
 	}
 

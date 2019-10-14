@@ -10,11 +10,6 @@ struct ipv_counts {
 	unsigned int v6;
 };
 
-typedef int btf_map_key;
-typedef struct ipv_counts btf_map_value;
-btf_map_key dumm_key;
-btf_map_value dummy_value;
-
 struct bpf_map_def SEC("maps") btf_map = {
 	.type = BPF_MAP_TYPE_ARRAY,
 	.key_size = sizeof(int),
@@ -22,13 +17,15 @@ struct bpf_map_def SEC("maps") btf_map = {
 	.max_entries = 4,
 };
 
+BPF_ANNOTATE_KV_PAIR(btf_map, int, struct ipv_counts);
+
 struct dummy_tracepoint_args {
 	unsigned long long pad;
 	struct sock *sock;
 };
 
-SEC("dummy_tracepoint")
-int _dummy_tracepoint(struct dummy_tracepoint_args *arg)
+__attribute__((noinline))
+static int test_long_fname_2(struct dummy_tracepoint_args *arg)
 {
 	struct ipv_counts *counts;
 	int key = 0;
@@ -43,6 +40,18 @@ int _dummy_tracepoint(struct dummy_tracepoint_args *arg)
 	counts->v6++;
 
 	return 0;
+}
+
+__attribute__((noinline))
+static int test_long_fname_1(struct dummy_tracepoint_args *arg)
+{
+	return test_long_fname_2(arg);
+}
+
+SEC("dummy_tracepoint")
+int _dummy_tracepoint(struct dummy_tracepoint_args *arg)
+{
+	return test_long_fname_1(arg);
 }
 
 char _license[] SEC("license") = "GPL";

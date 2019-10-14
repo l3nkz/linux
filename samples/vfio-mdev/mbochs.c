@@ -71,11 +71,19 @@
 #define MBOCHS_NAME		  "mbochs"
 #define MBOCHS_CLASS_NAME	  "mbochs"
 
+#define MBOCHS_EDID_REGION_INDEX  VFIO_PCI_NUM_REGIONS
+#define MBOCHS_NUM_REGIONS        (MBOCHS_EDID_REGION_INDEX+1)
+
 #define MBOCHS_CONFIG_SPACE_SIZE  0xff
 #define MBOCHS_MMIO_BAR_OFFSET	  PAGE_SIZE
 #define MBOCHS_MMIO_BAR_SIZE	  PAGE_SIZE
-#define MBOCHS_MEMORY_BAR_OFFSET  (MBOCHS_MMIO_BAR_OFFSET + \
+#define MBOCHS_EDID_OFFSET	  (MBOCHS_MMIO_BAR_OFFSET +	\
 				   MBOCHS_MMIO_BAR_SIZE)
+#define MBOCHS_EDID_SIZE	  PAGE_SIZE
+#define MBOCHS_MEMORY_BAR_OFFSET  (MBOCHS_EDID_OFFSET + \
+				   MBOCHS_EDID_SIZE)
+
+#define MBOCHS_EDID_BLOB_OFFSET   (MBOCHS_EDID_SIZE/2)
 
 #define STORE_LE16(addr, val)	(*(u16 *)addr = val)
 #define STORE_LE32(addr, val)	(*(u32 *)addr = val)
@@ -95,16 +103,24 @@ MODULE_PARM_DESC(mem, "megabytes available to " MBOCHS_NAME " devices");
 static const struct mbochs_type {
 	const char *name;
 	u32 mbytes;
+	u32 max_x;
+	u32 max_y;
 } mbochs_types[] = {
 	{
 		.name	= MBOCHS_CLASS_NAME "-" MBOCHS_TYPE_1,
 		.mbytes = 4,
+		.max_x  = 800,
+		.max_y  = 600,
 	}, {
 		.name	= MBOCHS_CLASS_NAME "-" MBOCHS_TYPE_2,
 		.mbytes = 16,
+		.max_x  = 1920,
+		.max_y  = 1440,
 	}, {
 		.name	= MBOCHS_CLASS_NAME "-" MBOCHS_TYPE_3,
 		.mbytes = 64,
+		.max_x  = 0,
+		.max_y  = 0,
 	},
 };
 
@@ -114,6 +130,11 @@ static struct class	*mbochs_class;
 static struct cdev	mbochs_cdev;
 static struct device	mbochs_dev;
 static int		mbochs_used_mbytes;
+
+struct vfio_region_info_ext {
+	struct vfio_region_info          base;
+	struct vfio_region_info_cap_type type;
+};
 
 struct mbochs_mode {
 	u32 drm_format;
@@ -144,13 +165,14 @@ struct mdev_state {
 	u32 memory_bar_mask;
 	struct mutex ops_lock;
 	struct mdev_device *mdev;
-	struct vfio_device_info dev_info;
 
 	const struct mbochs_type *type;
 	u16 vbe[VBE_DISPI_INDEX_COUNT];
 	u64 memsize;
 	struct page **pages;
 	pgoff_t pagecount;
+	struct vfio_region_gfx_edid edid_regs;
+	u8 edid_blob[0x400];
 
 	struct list_head dmabufs;
 	u32 active_id;
@@ -178,6 +200,8 @@ static const char *vbe_name(u32 index)
 	return "(invalid)";
 }
 
+static struct page *__mbochs_get_page(struct mdev_state *mdev_state,
+				      pgoff_t pgoff);
 static struct page *mbochs_get_page(struct mdev_state *mdev_state,
 				    pgoff_t pgoff);
 
@@ -340,10 +364,20 @@ static void handle_mmio_read(struct mdev_state *mdev_state, u16 offset,
 			     char *buf, u32 count)
 {
 	struct device *dev = mdev_dev(mdev_state->mdev);
+	struct vfio_region_gfx_edid *edid;
 	u16 reg16 = 0;
 	int index;
 
 	switch (offset) {
+	case 0x000 ... 0x3ff: /* edid block */
+		edid = &mdev_state->edid_regs;
+		if (edid->link_state != VFIO_DEVICE_GFX_LINK_STATE_UP ||
+		    offset >= edid->edid_size) {
+			memset(buf, 0, count);
+			break;
+		}
+		memcpy(buf, mdev_state->edid_blob + offset, count);
+		break;
 	case 0x500 ... 0x515: /* bochs dispi interface */
 		if (count != 2)
 			goto unhandled;
@@ -361,6 +395,44 @@ unhandled:
 		memset(buf, 0, count);
 		break;
 	}
+}
+
+static void handle_edid_regs(struct mdev_state *mdev_state, u16 offset,
+			     char *buf, u32 count, bool is_write)
+{
+	char *regs = (void *)&mdev_state->edid_regs;
+
+	if (offset + count > sizeof(mdev_state->edid_regs))
+		return;
+	if (count != 4)
+		return;
+	if (offset % 4)
+		return;
+
+	if (is_write) {
+		switch (offset) {
+		case offsetof(struct vfio_region_gfx_edid, link_state):
+		case offsetof(struct vfio_region_gfx_edid, edid_size):
+			memcpy(regs + offset, buf, count);
+			break;
+		default:
+			/* read-only regs */
+			break;
+		}
+	} else {
+		memcpy(buf, regs + offset, count);
+	}
+}
+
+static void handle_edid_blob(struct mdev_state *mdev_state, u16 offset,
+			     char *buf, u32 count, bool is_write)
+{
+	if (offset + count > mdev_state->edid_regs.edid_max_size)
+		return;
+	if (is_write)
+		memcpy(mdev_state->edid_blob + offset, buf, count);
+	else
+		memcpy(buf, mdev_state->edid_blob + offset, count);
 }
 
 static ssize_t mdev_access(struct mdev_device *mdev, char *buf, size_t count,
@@ -382,19 +454,31 @@ static ssize_t mdev_access(struct mdev_device *mdev, char *buf, size_t count,
 			memcpy(buf, (mdev_state->vconfig + pos), count);
 
 	} else if (pos >= MBOCHS_MMIO_BAR_OFFSET &&
-		   pos + count <= MBOCHS_MEMORY_BAR_OFFSET) {
+		   pos + count <= (MBOCHS_MMIO_BAR_OFFSET +
+				   MBOCHS_MMIO_BAR_SIZE)) {
 		pos -= MBOCHS_MMIO_BAR_OFFSET;
 		if (is_write)
 			handle_mmio_write(mdev_state, pos, buf, count);
 		else
 			handle_mmio_read(mdev_state, pos, buf, count);
 
+	} else if (pos >= MBOCHS_EDID_OFFSET &&
+		   pos + count <= (MBOCHS_EDID_OFFSET +
+				   MBOCHS_EDID_SIZE)) {
+		pos -= MBOCHS_EDID_OFFSET;
+		if (pos < MBOCHS_EDID_BLOB_OFFSET) {
+			handle_edid_regs(mdev_state, pos, buf, count, is_write);
+		} else {
+			pos -= MBOCHS_EDID_BLOB_OFFSET;
+			handle_edid_blob(mdev_state, pos, buf, count, is_write);
+		}
+
 	} else if (pos >= MBOCHS_MEMORY_BAR_OFFSET &&
 		   pos + count <=
 		   MBOCHS_MEMORY_BAR_OFFSET + mdev_state->memsize) {
 		pos -= MBOCHS_MMIO_BAR_OFFSET;
 		poff = pos & ~PAGE_MASK;
-		pg = mbochs_get_page(mdev_state, pos >> PAGE_SHIFT);
+		pg = __mbochs_get_page(mdev_state, pos >> PAGE_SHIFT);
 		map = kmap(pg);
 		if (is_write)
 			memcpy(map + poff, buf, count);
@@ -469,6 +553,10 @@ static int mbochs_create(struct kobject *kobj, struct mdev_device *mdev)
 	mdev_state->next_id = 1;
 
 	mdev_state->type = type;
+	mdev_state->edid_regs.max_xres = type->max_x;
+	mdev_state->edid_regs.max_yres = type->max_y;
+	mdev_state->edid_regs.edid_offset = MBOCHS_EDID_BLOB_OFFSET;
+	mdev_state->edid_regs.edid_max_size = sizeof(mdev_state->edid_blob);
 	mbochs_create_config_space(mdev_state);
 	mbochs_reset(mdev);
 
@@ -657,7 +745,7 @@ static void mbochs_put_pages(struct mdev_state *mdev_state)
 	dev_dbg(dev, "%s: %d pages released\n", __func__, count);
 }
 
-static int mbochs_region_vm_fault(struct vm_fault *vmf)
+static vm_fault_t mbochs_region_vm_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct mdev_state *mdev_state = vma->vm_private_data;
@@ -695,7 +783,7 @@ static int mbochs_mmap(struct mdev_device *mdev, struct vm_area_struct *vma)
 	return 0;
 }
 
-static int mbochs_dmabuf_vm_fault(struct vm_fault *vmf)
+static vm_fault_t mbochs_dmabuf_vm_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct mbochs_dmabuf *dmabuf = vma->vm_private_data;
@@ -803,15 +891,6 @@ static void mbochs_release_dmabuf(struct dma_buf *buf)
 	mutex_unlock(&mdev_state->ops_lock);
 }
 
-static void *mbochs_kmap_atomic_dmabuf(struct dma_buf *buf,
-				       unsigned long page_num)
-{
-	struct mbochs_dmabuf *dmabuf = buf->priv;
-	struct page *page = dmabuf->pages[page_num];
-
-	return kmap_atomic(page);
-}
-
 static void *mbochs_kmap_dmabuf(struct dma_buf *buf, unsigned long page_num)
 {
 	struct mbochs_dmabuf *dmabuf = buf->priv;
@@ -820,12 +899,18 @@ static void *mbochs_kmap_dmabuf(struct dma_buf *buf, unsigned long page_num)
 	return kmap(page);
 }
 
+static void mbochs_kunmap_dmabuf(struct dma_buf *buf, unsigned long page_num,
+				 void *vaddr)
+{
+	kunmap(vaddr);
+}
+
 static struct dma_buf_ops mbochs_dmabuf_ops = {
 	.map_dma_buf	  = mbochs_map_dmabuf,
 	.unmap_dma_buf	  = mbochs_unmap_dmabuf,
 	.release	  = mbochs_release_dmabuf,
-	.map_atomic	  = mbochs_kmap_atomic_dmabuf,
 	.map		  = mbochs_kmap_dmabuf,
+	.unmap		  = mbochs_kunmap_dmabuf,
 	.mmap		  = mbochs_mmap_dmabuf,
 };
 
@@ -933,16 +1018,16 @@ static int mbochs_dmabuf_export(struct mbochs_dmabuf *dmabuf)
 }
 
 static int mbochs_get_region_info(struct mdev_device *mdev,
-				  struct vfio_region_info *region_info,
-				  u16 *cap_type_id, void **cap_type)
+				  struct vfio_region_info_ext *ext)
 {
+	struct vfio_region_info *region_info = &ext->base;
 	struct mdev_state *mdev_state;
 
 	mdev_state = mdev_get_drvdata(mdev);
 	if (!mdev_state)
 		return -EINVAL;
 
-	if (region_info->index >= VFIO_PCI_NUM_REGIONS)
+	if (region_info->index >= MBOCHS_NUM_REGIONS)
 		return -EINVAL;
 
 	switch (region_info->index) {
@@ -965,6 +1050,20 @@ static int mbochs_get_region_info(struct mdev_device *mdev,
 		region_info->flags  = (VFIO_REGION_INFO_FLAG_READ  |
 				       VFIO_REGION_INFO_FLAG_WRITE);
 		break;
+	case MBOCHS_EDID_REGION_INDEX:
+		ext->base.argsz = sizeof(*ext);
+		ext->base.offset = MBOCHS_EDID_OFFSET;
+		ext->base.size = MBOCHS_EDID_SIZE;
+		ext->base.flags = (VFIO_REGION_INFO_FLAG_READ  |
+				   VFIO_REGION_INFO_FLAG_WRITE |
+				   VFIO_REGION_INFO_FLAG_CAPS);
+		ext->base.cap_offset = offsetof(typeof(*ext), type);
+		ext->type.header.id = VFIO_REGION_INFO_CAP_TYPE;
+		ext->type.header.version = 1;
+		ext->type.header.next = 0;
+		ext->type.type = VFIO_REGION_TYPE_GFX;
+		ext->type.subtype = VFIO_REGION_SUBTYPE_GFX_EDID;
+		break;
 	default:
 		region_info->size   = 0;
 		region_info->offset = 0;
@@ -985,7 +1084,7 @@ static int mbochs_get_device_info(struct mdev_device *mdev,
 				  struct vfio_device_info *dev_info)
 {
 	dev_info->flags = VFIO_DEVICE_FLAGS_PCI;
-	dev_info->num_regions = VFIO_PCI_NUM_REGIONS;
+	dev_info->num_regions = MBOCHS_NUM_REGIONS;
 	dev_info->num_irqs = VFIO_PCI_NUM_IRQS;
 	return 0;
 }
@@ -1085,7 +1184,7 @@ static long mbochs_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			unsigned long arg)
 {
 	int ret = 0;
-	unsigned long minsz;
+	unsigned long minsz, outsz;
 	struct mdev_state *mdev_state;
 
 	mdev_state = mdev_get_drvdata(mdev);
@@ -1107,8 +1206,6 @@ static long mbochs_ioctl(struct mdev_device *mdev, unsigned int cmd,
 		if (ret)
 			return ret;
 
-		memcpy(&mdev_state->dev_info, &info, sizeof(info));
-
 		if (copy_to_user((void __user *)arg, &info, minsz))
 			return -EFAULT;
 
@@ -1116,24 +1213,24 @@ static long mbochs_ioctl(struct mdev_device *mdev, unsigned int cmd,
 	}
 	case VFIO_DEVICE_GET_REGION_INFO:
 	{
-		struct vfio_region_info info;
-		u16 cap_type_id = 0;
-		void *cap_type = NULL;
+		struct vfio_region_info_ext info;
 
-		minsz = offsetofend(struct vfio_region_info, offset);
+		minsz = offsetofend(typeof(info), base.offset);
 
 		if (copy_from_user(&info, (void __user *)arg, minsz))
 			return -EFAULT;
 
-		if (info.argsz < minsz)
+		outsz = info.base.argsz;
+		if (outsz < minsz)
+			return -EINVAL;
+		if (outsz > sizeof(info))
 			return -EINVAL;
 
-		ret = mbochs_get_region_info(mdev, &info, &cap_type_id,
-					   &cap_type);
+		ret = mbochs_get_region_info(mdev, &info);
 		if (ret)
 			return ret;
 
-		if (copy_to_user((void __user *)arg, &info, minsz))
+		if (copy_to_user((void __user *)arg, &info, outsz))
 			return -EFAULT;
 
 		return 0;
@@ -1149,7 +1246,7 @@ static long mbochs_ioctl(struct mdev_device *mdev, unsigned int cmd,
 			return -EFAULT;
 
 		if ((info.argsz < minsz) ||
-		    (info.index >= mdev_state->dev_info.num_irqs))
+		    (info.index >= VFIO_PCI_NUM_IRQS))
 			return -EINVAL;
 
 		ret = mbochs_get_irq_info(mdev, &info);

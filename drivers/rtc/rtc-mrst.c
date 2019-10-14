@@ -90,7 +90,7 @@ static int mrst_read_time(struct device *dev, struct rtc_time *time)
 	unsigned long flags;
 
 	if (vrtc_is_updating())
-		mdelay(20);
+		msleep(20);
 
 	spin_lock_irqsave(&rtc_lock, flags);
 	time->tm_sec = vrtc_cmos_read(RTC_SECONDS);
@@ -261,11 +261,10 @@ static int mrst_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
 
 static int mrst_procfs(struct device *dev, struct seq_file *seq)
 {
-	unsigned char	rtc_control, valid;
+	unsigned char	rtc_control;
 
 	spin_lock_irq(&rtc_lock);
 	rtc_control = vrtc_cmos_read(RTC_CONTROL);
-	valid = vrtc_cmos_read(RTC_VALID);
 	spin_unlock_irq(&rtc_lock);
 
 	seq_printf(seq,
@@ -367,10 +366,8 @@ static int vrtc_mrst_do_probe(struct device *dev, struct resource *iomem,
 	}
 
 	retval = rtc_register_device(mrst_rtc.rtc);
-	if (retval) {
-		retval = PTR_ERR(mrst_rtc.rtc);
+	if (retval)
 		goto cleanup0;
-	}
 
 	dev_dbg(dev, "initialised\n");
 	return 0;

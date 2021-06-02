@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HighPoint RR3xxx/4xxx controller driver for Linux
  * Copyright (C) 2006-2015 HighPoint Technologies, Inc. All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Please report bugs/comments/suggestions to linux@highpoint-tech.com
  *
@@ -766,7 +758,6 @@ static void hptiop_finish_scsi_req(struct hptiop_hba *hba, u32 tag,
 		scp->result = SAM_STAT_CHECK_CONDITION;
 		memcpy(scp->sense_buffer, &req->sg_list, SCSI_SENSE_BUFFERSIZE);
 		goto skip_resid;
-		break;
 
 	default:
 		scp->result = DRIVER_INVALID << 24 | DID_ABORT << 16;

@@ -118,6 +118,7 @@ static int restore_sigregs32(struct pt_regs *regs,_sigregs32 __user *sregs)
 	fpregs_load((_s390_fp_regs *) &user_sregs.fpregs, &current->thread.fpu);
 
 	clear_pt_regs_flag(regs, PIF_SYSCALL); /* No longer in a system call */
+	clear_pt_regs_flag(regs, PIF_SYSCALL_RESTART);
 	return 0;
 }
 
@@ -194,7 +195,7 @@ COMPAT_SYSCALL_DEFINE0(sigreturn)
 	load_sigregs();
 	return regs->gprs[2];
 badframe:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 	return 0;
 }
 
@@ -217,7 +218,7 @@ COMPAT_SYSCALL_DEFINE0(rt_sigreturn)
 	load_sigregs();
 	return regs->gprs[2];
 badframe:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 	return 0;
 }	
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Virtio SCSI HBA driver
  *
@@ -7,10 +8,6 @@
  * Authors:
  *  Stefan Hajnoczi   <stefanha@linux.vnet.ibm.com>
  *  Paolo Bonzini   <pbonzini@redhat.com>
- *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -32,6 +29,8 @@
 #include <scsi/scsi_devinfo.h>
 #include <linux/seqlock.h>
 #include <linux/blk-mq-virtio.h>
+
+#include "sd.h"
 
 #define VIRTIO_SCSI_MEMPOOL_SZ 64
 #define VIRTIO_SCSI_EVENT_LEN 8
@@ -77,9 +76,6 @@ struct virtio_scsi {
 
 	u32 num_queues;
 
-	/* If the affinity hint is set for virtqueues */
-	bool affinity_hint_set;
-
 	struct hlist_node node;
 
 	/* Protected by event_vq lock */
@@ -100,19 +96,11 @@ static inline struct Scsi_Host *virtio_scsi_host(struct virtio_device *vdev)
 
 static void virtscsi_compute_resid(struct scsi_cmnd *sc, u32 resid)
 {
-	if (!resid)
-		return;
-
-	if (!scsi_bidi_cmnd(sc)) {
+	if (resid)
 		scsi_set_resid(sc, resid);
-		return;
-	}
-
-	scsi_in(sc)->resid = min(resid, scsi_in(sc)->length);
-	scsi_out(sc)->resid = resid - scsi_in(sc)->resid;
 }
 
-/**
+/*
  * virtscsi_complete_cmd - finish a scsi_cmd and invoke scsi_done
  *
  * Called with vq_lock held.
@@ -160,7 +148,7 @@ static void virtscsi_complete_cmd(struct virtio_scsi *vscsi, void *buf)
 	default:
 		scmd_printk(KERN_WARNING, sc, "Unknown response %d",
 			    resp->response);
-		/* fall through */
+		fallthrough;
 	case VIRTIO_SCSI_S_FAILURE:
 		set_host_byte(sc, DID_ERROR);
 		break;
@@ -296,7 +284,12 @@ static void virtscsi_handle_transport_reset(struct virtio_scsi *vscsi,
 
 	switch (virtio32_to_cpu(vscsi->vdev, event->reason)) {
 	case VIRTIO_SCSI_EVT_RESET_RESCAN:
-		scsi_add_device(shost, 0, target, lun);
+		if (lun == 0) {
+			scsi_scan_target(&shost->shost_gendev, 0, target,
+					 SCAN_WILD_CARD, SCSI_SCAN_INITIAL);
+		} else {
+			scsi_add_device(shost, 0, target, lun);
+		}
 		break;
 	case VIRTIO_SCSI_EVT_RESET_REMOVED:
 		sdev = scsi_device_lookup(shost, 0, target, lun);
@@ -338,6 +331,44 @@ static void virtscsi_handle_param_change(struct virtio_scsi *vscsi,
 	scsi_device_put(sdev);
 }
 
+static void virtscsi_rescan_hotunplug(struct virtio_scsi *vscsi)
+{
+	struct scsi_device *sdev;
+	struct Scsi_Host *shost = virtio_scsi_host(vscsi->vdev);
+	unsigned char scsi_cmd[MAX_COMMAND_SIZE];
+	int result, inquiry_len, inq_result_len = 256;
+	char *inq_result = kmalloc(inq_result_len, GFP_KERNEL);
+
+	shost_for_each_device(sdev, shost) {
+		inquiry_len = sdev->inquiry_len ? sdev->inquiry_len : 36;
+
+		memset(scsi_cmd, 0, sizeof(scsi_cmd));
+		scsi_cmd[0] = INQUIRY;
+		scsi_cmd[4] = (unsigned char) inquiry_len;
+
+		memset(inq_result, 0, inq_result_len);
+
+		result = scsi_execute_req(sdev, scsi_cmd, DMA_FROM_DEVICE,
+					  inq_result, inquiry_len, NULL,
+					  SD_TIMEOUT, SD_MAX_RETRIES, NULL);
+
+		if (result == 0 && inq_result[0] >> 5) {
+			/* PQ indicates the LUN is not attached */
+			scsi_remove_device(sdev);
+		} else if (host_byte(result) == DID_BAD_TARGET) {
+			/*
+			 * If all LUNs of a virtio-scsi device are unplugged
+			 * it will respond with BAD TARGET on any INQUIRY
+			 * command.
+			 * Remove the device in this case as well.
+			 */
+			scsi_remove_device(sdev);
+		}
+	}
+
+	kfree(inq_result);
+}
+
 static void virtscsi_handle_event(struct work_struct *work)
 {
 	struct virtio_scsi_event_node *event_node =
@@ -349,6 +380,7 @@ static void virtscsi_handle_event(struct work_struct *work)
 	    cpu_to_virtio32(vscsi->vdev, VIRTIO_SCSI_T_EVENTS_MISSED)) {
 		event->event &= ~cpu_to_virtio32(vscsi->vdev,
 						   VIRTIO_SCSI_T_EVENTS_MISSED);
+		virtscsi_rescan_hotunplug(vscsi);
 		scsi_scan_host(virtio_scsi_host(vscsi->vdev));
 	}
 
@@ -383,14 +415,7 @@ static void virtscsi_event_done(struct virtqueue *vq)
 	virtscsi_vq_done(vscsi, &vscsi->event_vq, virtscsi_complete_event);
 };
 
-/**
- * virtscsi_add_cmd - add a virtio_scsi_cmd to a virtqueue
- * @vq		: the struct virtqueue we're talking about
- * @cmd		: command structure
- * @req_size	: size of the request buffer
- * @resp_size	: size of the response buffer
- */
-static int virtscsi_add_cmd(struct virtqueue *vq,
+static int __virtscsi_add_cmd(struct virtqueue *vq,
 			    struct virtio_scsi_cmd *cmd,
 			    size_t req_size, size_t resp_size)
 {
@@ -403,9 +428,9 @@ static int virtscsi_add_cmd(struct virtqueue *vq,
 
 	if (sc && sc->sc_data_direction != DMA_NONE) {
 		if (sc->sc_data_direction != DMA_FROM_DEVICE)
-			out = &scsi_out(sc)->table;
+			out = &sc->sdb.table;
 		if (sc->sc_data_direction != DMA_TO_DEVICE)
-			in = &scsi_in(sc)->table;
+			in = &sc->sdb.table;
 	}
 
 	/* Request header.  */
@@ -435,17 +460,39 @@ static int virtscsi_add_cmd(struct virtqueue *vq,
 	return virtqueue_add_sgs(vq, sgs, out_num, in_num, cmd, GFP_ATOMIC);
 }
 
-static int virtscsi_kick_cmd(struct virtio_scsi_vq *vq,
+static void virtscsi_kick_vq(struct virtio_scsi_vq *vq)
+{
+	bool needs_kick;
+	unsigned long flags;
+
+	spin_lock_irqsave(&vq->vq_lock, flags);
+	needs_kick = virtqueue_kick_prepare(vq->vq);
+	spin_unlock_irqrestore(&vq->vq_lock, flags);
+
+	if (needs_kick)
+		virtqueue_notify(vq->vq);
+}
+
+/**
+ * virtscsi_add_cmd - add a virtio_scsi_cmd to a virtqueue, optionally kick it
+ * @vq		: the struct virtqueue we're talking about
+ * @cmd		: command structure
+ * @req_size	: size of the request buffer
+ * @resp_size	: size of the response buffer
+ * @kick	: whether to kick the virtqueue immediately
+ */
+static int virtscsi_add_cmd(struct virtio_scsi_vq *vq,
 			     struct virtio_scsi_cmd *cmd,
-			     size_t req_size, size_t resp_size)
+			     size_t req_size, size_t resp_size,
+			     bool kick)
 {
 	unsigned long flags;
 	int err;
 	bool needs_kick = false;
 
 	spin_lock_irqsave(&vq->vq_lock, flags);
-	err = virtscsi_add_cmd(vq->vq, cmd, req_size, resp_size);
-	if (!err)
+	err = __virtscsi_add_cmd(vq->vq, cmd, req_size, resp_size);
+	if (!err && kick)
 		needs_kick = virtqueue_kick_prepare(vq->vq);
 
 	spin_unlock_irqrestore(&vq->vq_lock, flags);
@@ -510,6 +557,7 @@ static int virtscsi_queuecommand(struct Scsi_Host *shost,
 	struct virtio_scsi *vscsi = shost_priv(shost);
 	struct virtio_scsi_vq *req_vq = virtscsi_pick_vq_mq(vscsi, sc);
 	struct virtio_scsi_cmd *cmd = scsi_cmd_priv(sc);
+	bool kick;
 	unsigned long flags;
 	int req_size;
 	int ret;
@@ -539,7 +587,8 @@ static int virtscsi_queuecommand(struct Scsi_Host *shost,
 		req_size = sizeof(cmd->req.cmd);
 	}
 
-	ret = virtscsi_kick_cmd(req_vq, cmd, req_size, sizeof(cmd->resp.cmd));
+	kick = (sc->flags & SCMD_LAST) != 0;
+	ret = virtscsi_add_cmd(req_vq, cmd, req_size, sizeof(cmd->resp.cmd), kick);
 	if (ret == -EIO) {
 		cmd->resp.cmd.response = VIRTIO_SCSI_S_BAD_TARGET;
 		spin_lock_irqsave(&req_vq->vq_lock, flags);
@@ -557,8 +606,8 @@ static int virtscsi_tmf(struct virtio_scsi *vscsi, struct virtio_scsi_cmd *cmd)
 	int ret = FAILED;
 
 	cmd->comp = &comp;
-	if (virtscsi_kick_cmd(&vscsi->ctrl_vq, cmd,
-			      sizeof cmd->req.tmf, sizeof cmd->resp.tmf) < 0)
+	if (virtscsi_add_cmd(&vscsi->ctrl_vq, cmd,
+			      sizeof cmd->req.tmf, sizeof cmd->resp.tmf, true) < 0)
 		goto out;
 
 	wait_for_completion(&comp);
@@ -594,7 +643,6 @@ static int virtscsi_device_reset(struct scsi_cmnd *sc)
 		return FAILED;
 
 	memset(cmd, 0, sizeof(*cmd));
-	cmd->sc = sc;
 	cmd->req.tmf = (struct virtio_scsi_ctrl_tmf_req){
 		.type = VIRTIO_SCSI_T_TMF,
 		.subtype = cpu_to_virtio32(vscsi->vdev,
@@ -653,7 +701,6 @@ static int virtscsi_abort(struct scsi_cmnd *sc)
 		return FAILED;
 
 	memset(cmd, 0, sizeof(*cmd));
-	cmd->sc = sc;
 	cmd->req.tmf = (struct virtio_scsi_ctrl_tmf_req){
 		.type = VIRTIO_SCSI_T_TMF,
 		.subtype = VIRTIO_SCSI_T_TMF_ABORT_TASK,
@@ -669,9 +716,16 @@ static int virtscsi_abort(struct scsi_cmnd *sc)
 static int virtscsi_map_queues(struct Scsi_Host *shost)
 {
 	struct virtio_scsi *vscsi = shost_priv(shost);
-	struct blk_mq_queue_map *qmap = &shost->tag_set.map[0];
+	struct blk_mq_queue_map *qmap = &shost->tag_set.map[HCTX_TYPE_DEFAULT];
 
 	return blk_mq_virtio_map_queues(qmap, vscsi->vdev, 2);
+}
+
+static void virtscsi_commit_rqs(struct Scsi_Host *shost, u16 hwq)
+{
+	struct virtio_scsi *vscsi = shost_priv(shost);
+
+	virtscsi_kick_vq(&vscsi->req_vqs[hwq]);
 }
 
 /*
@@ -691,6 +745,7 @@ static struct scsi_host_template virtscsi_host_template = {
 	.this_id = -1,
 	.cmd_size = sizeof(struct virtio_scsi_cmd),
 	.queuecommand = virtscsi_queuecommand,
+	.commit_rqs = virtscsi_commit_rqs,
 	.change_queue_depth = virtscsi_change_queue_depth,
 	.eh_abort_handler = virtscsi_abort,
 	.eh_device_reset_handler = virtscsi_device_reset,
@@ -700,19 +755,18 @@ static struct scsi_host_template virtscsi_host_template = {
 	.dma_boundary = UINT_MAX,
 	.map_queues = virtscsi_map_queues,
 	.track_queue_depth = 1,
-	.force_blk_mq = 1,
 };
 
 #define virtscsi_config_get(vdev, fld) \
 	({ \
-		typeof(((struct virtio_scsi_config *)0)->fld) __val; \
+		__virtio_native_type(struct virtio_scsi_config, fld) __val; \
 		virtio_cread(vdev, struct virtio_scsi_config, fld, &__val); \
 		__val; \
 	})
 
 #define virtscsi_config_set(vdev, fld, val) \
 	do { \
-		typeof(((struct virtio_scsi_config *)0)->fld) __val = (val); \
+		__virtio_native_type(struct virtio_scsi_config, fld) __val = (val); \
 		virtio_cwrite(vdev, struct virtio_scsi_config, fld, &__val); \
 	} while(0)
 
@@ -803,11 +857,12 @@ static int virtscsi_probe(struct virtio_device *vdev)
 
 	/* We need to know how many queues before we allocate. */
 	num_queues = virtscsi_config_get(vdev, num_queues) ? : 1;
+	num_queues = min_t(unsigned int, nr_cpu_ids, num_queues);
 
 	num_targets = virtscsi_config_get(vdev, max_target) + 1;
 
 	shost = scsi_host_alloc(&virtscsi_host_template,
-		sizeof(*vscsi) + sizeof(vscsi->req_vqs[0]) * num_queues);
+				struct_size(vscsi, req_vqs, num_queues));
 	if (!shost)
 		return -ENOMEM;
 
@@ -960,14 +1015,10 @@ static int __init init(void)
 	return 0;
 
 error:
-	if (virtscsi_cmd_pool) {
-		mempool_destroy(virtscsi_cmd_pool);
-		virtscsi_cmd_pool = NULL;
-	}
-	if (virtscsi_cmd_cache) {
-		kmem_cache_destroy(virtscsi_cmd_cache);
-		virtscsi_cmd_cache = NULL;
-	}
+	mempool_destroy(virtscsi_cmd_pool);
+	virtscsi_cmd_pool = NULL;
+	kmem_cache_destroy(virtscsi_cmd_cache);
+	virtscsi_cmd_cache = NULL;
 	return ret;
 }
 

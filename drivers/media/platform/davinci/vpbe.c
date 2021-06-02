@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 Texas Instruments Inc
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation version 2.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -104,7 +96,7 @@ static int vpbe_enum_outputs(struct vpbe_device *vpbe_dev,
 			     struct v4l2_output *output)
 {
 	struct vpbe_config *cfg = vpbe_dev->cfg;
-	int temp_index = output->index;
+	unsigned int temp_index = output->index;
 
 	if (temp_index >= cfg->num_outputs)
 		return -EINVAL;
@@ -242,7 +234,7 @@ static int vpbe_set_output(struct vpbe_device *vpbe_dev, int index)
 		goto unlock;
 
 	/*
-	 * It is assumed that venc or extenal encoder will set a default
+	 * It is assumed that venc or external encoder will set a default
 	 * mode in the sub device. For external encoder or LCD pannel output,
 	 * we also need to set up the lcd port for the required mode. So setup
 	 * the lcd port for the default mode that is configured in the board
@@ -636,7 +628,7 @@ static int vpbe_initialize(struct device *dev, struct vpbe_device *vpbe_dev)
 		if (err) {
 			v4l2_err(&vpbe_dev->v4l2_dev,
 				 "unable to initialize the OSD device");
-			err = -ENOMEM;
+			ret = -ENOMEM;
 			goto fail_dev_unregister;
 		}
 	}

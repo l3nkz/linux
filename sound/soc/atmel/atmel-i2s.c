@@ -1,21 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Atmel I2S controller
  *
  * Copyright (C) 2015 Atmel Corporation
  *
  * Author: Cyrille Pitchen <cyrille.pitchen@atmel.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/init.h>
@@ -552,7 +541,7 @@ static struct snd_soc_dai_driver atmel_i2s_dai = {
 		.formats = ATMEL_I2S_FORMATS,
 	},
 	.ops = &atmel_i2s_dai_ops,
-	.symmetric_rates = 1,
+	.symmetric_rate = 1,
 };
 
 static const struct snd_soc_component_driver atmel_i2s_component = {
@@ -574,8 +563,8 @@ static int atmel_i2s_sama5d2_mck_init(struct atmel_i2s_dev *dev,
 		err = PTR_ERR(muxclk);
 		if (err == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
-		dev_warn(dev->dev,
-			 "failed to get the I2S clock control: %d\n", err);
+		dev_dbg(dev->dev,
+			"failed to get the I2S clock control: %d\n", err);
 		return 0;
 	}
 
@@ -606,7 +595,7 @@ static int atmel_i2s_probe(struct platform_device *pdev)
 	struct regmap *regmap;
 	void __iomem *base;
 	int irq;
-	int err = -ENXIO;
+	int err;
 	unsigned int pcm_flags = 0;
 	unsigned int version;
 

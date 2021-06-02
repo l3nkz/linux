@@ -70,7 +70,7 @@ static void i40iw_disconnect_worker(struct work_struct *work);
 /**
  * i40iw_free_sqbuf - put back puda buffer if refcount = 0
  * @vsi: pointer to vsi structure
- * @buf: puda buffer to free
+ * @bufp: puda buffer to free
  */
 void i40iw_free_sqbuf(struct i40iw_sc_vsi *vsi, void *bufp)
 {
@@ -729,6 +729,7 @@ static int i40iw_handle_tcp_options(struct i40iw_cm_node *cm_node,
 /**
  * i40iw_build_mpa_v1 - build a MPA V1 frame
  * @cm_node: connection's node
+ * @start_addr: MPA frame start address
  * @mpa_key: to do read0 or write0
  */
 static void i40iw_build_mpa_v1(struct i40iw_cm_node *cm_node,
@@ -904,7 +905,7 @@ static int i40iw_send_mpa_reject(struct i40iw_cm_node *cm_node,
 }
 
 /**
- * recv_mpa - process an IETF MPA frame
+ * i40iw_parse_mpa - process an IETF MPA frame
  * @cm_node: connection's node
  * @buffer: Data pointer
  * @type: to return accept or reject
@@ -1040,7 +1041,7 @@ negotiate_done:
 
 /**
  * i40iw_schedule_cm_timer
- * @@cm_node: connection's node
+ * @cm_node: connection's node
  * @sqbuf: buffer to send
  * @type: if it is send or close
  * @send_retrans: if rexmits to be done
@@ -1205,7 +1206,7 @@ static void i40iw_build_timer_list(struct list_head *timer_list,
 
 /**
  * i40iw_cm_timer_tick - system's timer expired callback
- * @pass: Pointing to cm_core
+ * @t: Timer instance to fetch the cm_core pointer from
  */
 static void i40iw_cm_timer_tick(struct timer_list *t)
 {
@@ -1463,6 +1464,7 @@ struct i40iw_cm_node *i40iw_find_node(struct i40iw_cm_core *cm_core,
  * @cm_core: cm's core
  * @dst_port: listener tcp port num
  * @dst_addr: listener ip addr
+ * @vlan_id: vlan id for the given address
  * @listener_state: state to match with listen node's
  */
 static struct i40iw_cm_listener *i40iw_find_listener(
@@ -1521,7 +1523,7 @@ static void i40iw_add_hte_node(struct i40iw_cm_core *cm_core,
 /**
  * i40iw_find_port - find port that matches reference port
  * @hte: ptr to accelerated or non-accelerated list
- * @accelerated_list: flag for accelerated vs non-accelerated list
+ * @port: port number to locate
  */
 static bool i40iw_find_port(struct list_head *hte, u16 port)
 {
@@ -1773,8 +1775,11 @@ static enum i40iw_status_code i40iw_add_mqh_4(
 		if ((((rdma_vlan_dev_vlan_id(dev) < I40IW_NO_VLAN) &&
 		      (rdma_vlan_dev_real_dev(dev) == iwdev->netdev)) ||
 		    (dev == iwdev->netdev)) && (dev->flags & IFF_UP)) {
+			const struct in_ifaddr *ifa;
+
 			idev = in_dev_get(dev);
-			for_ifa(idev) {
+
+			in_dev_for_each_ifa_rtnl(ifa, idev) {
 				i40iw_debug(&iwdev->sc_dev,
 					    I40IW_DEBUG_CM,
 					    "Allocating child CM Listener forIP=%pI4, vlan_id=%d, MAC=%pM\n",
@@ -1819,7 +1824,7 @@ static enum i40iw_status_code i40iw_add_mqh_4(
 					cm_parent_listen_node->cm_core->stats_listen_nodes_created--;
 				}
 			}
-			endfor_ifa(idev);
+
 			in_dev_put(idev);
 		}
 	}
@@ -1831,6 +1836,7 @@ exit:
 /**
  * i40iw_dec_refcnt_listen - delete listener and associated cm nodes
  * @cm_core: cm's core
+ * @listener: passive connection's listener
  * @free_hanging_nodes: to free associated cm_nodes
  * @apbvt_del: flag to delete the apbvt
  */
@@ -1984,7 +1990,6 @@ static int i40iw_addr_resolve_neigh(struct i40iw_device *iwdev,
 	struct rtable *rt;
 	struct neighbour *neigh;
 	int rc = arpindex;
-	struct net_device *netdev = iwdev->netdev;
 	__be32 dst_ipaddr = htonl(dst_ip);
 	__be32 src_ipaddr = htonl(src_ip);
 
@@ -1993,9 +1998,6 @@ static int i40iw_addr_resolve_neigh(struct i40iw_device *iwdev,
 		i40iw_pr_err("ip_route_output\n");
 		return rc;
 	}
-
-	if (netif_is_bond_slave(netdev))
-		netdev = netdev_master_upper_dev_get(netdev);
 
 	neigh = dst_neigh_lookup(&rt->dst, &dst_ipaddr);
 
@@ -2030,7 +2032,7 @@ static int i40iw_addr_resolve_neigh(struct i40iw_device *iwdev,
 	return rc;
 }
 
-/**
+/*
  * i40iw_get_dst_ipv6
  */
 static struct dst_entry *i40iw_get_dst_ipv6(struct sockaddr_in6 *src_addr,
@@ -2052,7 +2054,8 @@ static struct dst_entry *i40iw_get_dst_ipv6(struct sockaddr_in6 *src_addr,
 /**
  * i40iw_addr_resolve_neigh_ipv6 - resolve neighbor ipv6 address
  * @iwdev: iwarp device structure
- * @dst_ip: remote ip address
+ * @src: source ip address
+ * @dest: remote ip address
  * @arpindex: if there is an arp entry
  */
 static int i40iw_addr_resolve_neigh_ipv6(struct i40iw_device *iwdev,
@@ -2062,7 +2065,6 @@ static int i40iw_addr_resolve_neigh_ipv6(struct i40iw_device *iwdev,
 {
 	struct neighbour *neigh;
 	int rc = arpindex;
-	struct net_device *netdev = iwdev->netdev;
 	struct dst_entry *dst;
 	struct sockaddr_in6 dst_addr;
 	struct sockaddr_in6 src_addr;
@@ -2076,15 +2078,12 @@ static int i40iw_addr_resolve_neigh_ipv6(struct i40iw_device *iwdev,
 	dst = i40iw_get_dst_ipv6(&src_addr, &dst_addr);
 	if (!dst || dst->error) {
 		if (dst) {
-			dst_release(dst);
 			i40iw_pr_err("ip6_route_output returned dst->error = %d\n",
 				     dst->error);
+			dst_release(dst);
 		}
 		return rc;
 	}
-
-	if (netif_is_bond_slave(netdev))
-		netdev = netdev_master_upper_dev_get(netdev);
 
 	neigh = dst_neigh_lookup(dst, dst_addr.sin6_addr.in6_u.u6_addr32);
 
@@ -2327,7 +2326,7 @@ static void i40iw_rem_ref_cm_node(struct i40iw_cm_node *cm_node)
 	iwqp = cm_node->iwqp;
 	if (iwqp) {
 		iwqp->cm_node = NULL;
-		i40iw_rem_ref(&iwqp->ibqp);
+		i40iw_qp_rem_ref(&iwqp->ibqp);
 		cm_node->iwqp = NULL;
 	} else if (cm_node->qhash_set) {
 		i40iw_get_addr_info(cm_node, &nfo);
@@ -2431,7 +2430,7 @@ static void i40iw_handle_rst_pkt(struct i40iw_cm_node *cm_node,
 		}
 		break;
 	case I40IW_CM_STATE_MPAREQ_RCVD:
-		atomic_add_return(1, &cm_node->passive_state);
+		atomic_inc(&cm_node->passive_state);
 		break;
 	case I40IW_CM_STATE_ESTABLISHED:
 	case I40IW_CM_STATE_SYN_RCVD:
@@ -2448,7 +2447,7 @@ static void i40iw_handle_rst_pkt(struct i40iw_cm_node *cm_node,
 	case I40IW_CM_STATE_FIN_WAIT1:
 	case I40IW_CM_STATE_LAST_ACK:
 		cm_node->cm_id->rem_ref(cm_node->cm_id);
-		/* fall through */
+		fallthrough;
 	case I40IW_CM_STATE_TIME_WAIT:
 		cm_node->state = I40IW_CM_STATE_CLOSED;
 		i40iw_rem_ref_cm_node(cm_node);
@@ -3009,7 +3008,7 @@ static struct i40iw_cm_node *i40iw_create_cm_node(
 /**
  * i40iw_cm_reject - reject and teardown a connection
  * @cm_node: connection's node
- * @pdate: ptr to private data for reject
+ * @pdata: ptr to private data for reject
  * @plen: size of private data
  */
 static int i40iw_cm_reject(struct i40iw_cm_node *cm_node, const void *pdata, u8 plen)
@@ -3025,7 +3024,7 @@ static int i40iw_cm_reject(struct i40iw_cm_node *cm_node, const void *pdata, u8 
 	i40iw_cleanup_retrans_entry(cm_node);
 
 	if (!loopback) {
-		passive_state = atomic_add_return(1, &cm_node->passive_state);
+		passive_state = atomic_inc_return(&cm_node->passive_state);
 		if (passive_state == I40IW_SEND_RESET_EVENT) {
 			cm_node->state = I40IW_CM_STATE_CLOSED;
 			i40iw_rem_ref_cm_node(cm_node);
@@ -3237,7 +3236,7 @@ void i40iw_receive_ilq(struct i40iw_sc_vsi *vsi, struct i40iw_puda_buf *rbuf)
  * core
  * @iwdev: iwarp device structure
  */
-void i40iw_setup_cm_core(struct i40iw_device *iwdev)
+int i40iw_setup_cm_core(struct i40iw_device *iwdev)
 {
 	struct i40iw_cm_core *cm_core = &iwdev->cm_core;
 
@@ -3256,9 +3255,19 @@ void i40iw_setup_cm_core(struct i40iw_device *iwdev)
 
 	cm_core->event_wq = alloc_ordered_workqueue("iwewq",
 						    WQ_MEM_RECLAIM);
+	if (!cm_core->event_wq)
+		goto error;
 
 	cm_core->disconn_wq = alloc_ordered_workqueue("iwdwq",
 						      WQ_MEM_RECLAIM);
+	if (!cm_core->disconn_wq)
+		goto error;
+
+	return 0;
+error:
+	i40iw_cleanup_cm_core(&iwdev->cm_core);
+
+	return -ENOMEM;
 }
 
 /**
@@ -3278,8 +3287,10 @@ void i40iw_cleanup_cm_core(struct i40iw_cm_core *cm_core)
 		del_timer_sync(&cm_core->tcp_timer);
 	spin_unlock_irqrestore(&cm_core->ht_lock, flags);
 
-	destroy_workqueue(cm_core->event_wq);
-	destroy_workqueue(cm_core->disconn_wq);
+	if (cm_core->event_wq)
+		destroy_workqueue(cm_core->event_wq);
+	if (cm_core->disconn_wq)
+		destroy_workqueue(cm_core->disconn_wq);
 }
 
 /**
@@ -3445,7 +3456,7 @@ void i40iw_cm_disconn(struct i40iw_qp *iwqp)
 		kfree(work);
 		return;
 	}
-	i40iw_add_ref(&iwqp->ibqp);
+	i40iw_qp_add_ref(&iwqp->ibqp);
 	spin_unlock_irqrestore(&iwdev->qptable_lock, flags);
 
 	work->iwqp = iwqp;
@@ -3478,7 +3489,8 @@ static void i40iw_qp_disconnect(struct i40iw_qp *iwqp)
 		/* Need to free the Last Streaming Mode Message */
 		if (iwqp->ietf_mem.va) {
 			if (iwqp->lsmm_mr)
-				iwibdev->ibdev.ops.dereg_mr(iwqp->lsmm_mr);
+				iwibdev->ibdev.ops.dereg_mr(iwqp->lsmm_mr,
+							    NULL);
 			i40iw_free_dma_mem(iwdev->sc_dev.hw, &iwqp->ietf_mem);
 		}
 	}
@@ -3615,7 +3627,7 @@ static void i40iw_disconnect_worker(struct work_struct *work)
 
 	kfree(dwork);
 	i40iw_cm_disconn_true(iwqp);
-	i40iw_rem_ref(&iwqp->ibqp);
+	i40iw_qp_rem_ref(&iwqp->ibqp);
 }
 
 /**
@@ -3670,7 +3682,7 @@ int i40iw_accept(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 		return -EINVAL;
 	}
 
-	passive_state = atomic_add_return(1, &cm_node->passive_state);
+	passive_state = atomic_inc_return(&cm_node->passive_state);
 	if (passive_state == I40IW_SEND_RESET_EVENT) {
 		i40iw_rem_ref_cm_node(cm_node);
 		return -ECONNRESET;
@@ -3737,7 +3749,7 @@ int i40iw_accept(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 	cm_node->lsmm_size = accept.size + conn_param->private_data_len;
 	i40iw_cm_init_tsa_conn(iwqp, cm_node);
 	cm_id->add_ref(cm_id);
-	i40iw_add_ref(&iwqp->ibqp);
+	i40iw_qp_add_ref(&iwqp->ibqp);
 
 	attr.qp_state = IB_QPS_RTS;
 	cm_node->qhash_set = false;
@@ -3900,7 +3912,7 @@ int i40iw_connect(struct iw_cm_id *cm_id, struct iw_cm_conn_param *conn_param)
 	iwqp->cm_node = cm_node;
 	cm_node->iwqp = iwqp;
 	iwqp->cm_id = cm_id;
-	i40iw_add_ref(&iwqp->ibqp);
+	i40iw_qp_add_ref(&iwqp->ibqp);
 
 	if (cm_node->state != I40IW_CM_STATE_OFFLOADED) {
 		cm_node->state = I40IW_CM_STATE_SYN_SENT;
@@ -4263,11 +4275,11 @@ static void i40iw_qhash_ctrl(struct i40iw_device *iwdev,
 	/* if not found then add a child listener if interface is going up */
 	if (!ifup)
 		return;
-	child_listen_node = kzalloc(sizeof(*child_listen_node), GFP_ATOMIC);
+	child_listen_node = kmemdup(parent_listen_node,
+			sizeof(*child_listen_node), GFP_ATOMIC);
 	if (!child_listen_node)
 		return;
 	node_allocated = true;
-	memcpy(child_listen_node, parent_listen_node, sizeof(*child_listen_node));
 
 	memcpy(child_listen_node->loc_addr, ipaddr,  ipv4 ? 4 : 16);
 
@@ -4294,7 +4306,7 @@ set_qhash:
  * i40iw_cm_teardown_connections - teardown QPs
  * @iwdev: device pointer
  * @ipaddr: Pointer to IPv4 or IPv6 address
- * @ipv4: flag indicating IPv4 when true
+ * @nfo: cm info node
  * @disconnect_all: flag indicating disconnect all QPs
  * teardown QPs where source or destination addr matches ip addr
  */
@@ -4348,8 +4360,9 @@ void i40iw_cm_teardown_connections(struct i40iw_device *iwdev, u32 *ipaddr,
 }
 
 /**
- * i40iw_ifdown_notify - process an ifdown on an interface
+ * i40iw_if_notify - process an ifdown on an interface
  * @iwdev: device pointer
+ * @netdev: network interface device structure
  * @ipaddr: Pointer to IPv4 or IPv6 address
  * @ipv4: flag indicating IPv4 when true
  * @ifup: flag indicating interface up when true

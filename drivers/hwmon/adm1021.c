@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * adm1021.c - Part of lm_sensors, Linux kernel modules for hardware
  *	       monitoring
  * Copyright (c) 1998, 1999  Frodo Looijaard <frodol@dds.nl> and
  *			     Philip Edelbrock <phil@netroedge.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -438,8 +425,9 @@ static void adm1021_init_client(struct i2c_client *client)
 	i2c_smbus_write_byte_data(client, ADM1021_REG_CONV_RATE_W, 0x04);
 }
 
-static int adm1021_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static const struct i2c_device_id adm1021_id[];
+
+static int adm1021_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct adm1021_data *data;
@@ -450,7 +438,7 @@ static int adm1021_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	data->client = client;
-	data->type = id->driver_data;
+	data->type = i2c_match_id(adm1021_id, client)->driver_data;
 	mutex_init(&data->update_lock);
 
 	/* Initialize the ADM1021 chip */
@@ -485,7 +473,7 @@ static struct i2c_driver adm1021_driver = {
 	.driver = {
 		.name	= "adm1021",
 	},
-	.probe		= adm1021_probe,
+	.probe_new	= adm1021_probe,
 	.id_table	= adm1021_id,
 	.detect		= adm1021_detect,
 	.address_list	= normal_i2c,

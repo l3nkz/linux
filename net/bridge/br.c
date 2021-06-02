@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	Generic parts
  *	Linux ethernet bridge
  *
  *	Authors:
  *	Lennert Buytenhek		<buytenh@gnu.org>
- *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License
- *	as published by the Free Software Foundation; either version
- *	2 of the License, or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -40,10 +36,19 @@ static int br_device_event(struct notifier_block *unused, unsigned long event, v
 	bool changed_addr;
 	int err;
 
-	/* register of bridge completed, add sysfs entries */
-	if ((dev->priv_flags & IFF_EBRIDGE) && event == NETDEV_REGISTER) {
-		br_sysfs_addbr(dev);
-		return NOTIFY_DONE;
+	if (dev->priv_flags & IFF_EBRIDGE) {
+		err = br_vlan_bridge_event(dev, event, ptr);
+		if (err)
+			return notifier_from_errno(err);
+
+		if (event == NETDEV_REGISTER) {
+			/* register of bridge completed, add sysfs entries */
+			err = br_sysfs_addbr(dev);
+			if (err)
+				return notifier_from_errno(err);
+
+			return NOTIFY_DONE;
+		}
 	}
 
 	/* not a port of a bridge */
@@ -117,7 +122,7 @@ static int br_device_event(struct notifier_block *unused, unsigned long event, v
 		break;
 
 	case NETDEV_PRE_TYPE_CHANGE:
-		/* Forbid underlaying device to change its type. */
+		/* Forbid underlying device to change its type. */
 		return NOTIFY_BAD;
 
 	case NETDEV_RESEND_IGMP:
@@ -125,6 +130,9 @@ static int br_device_event(struct notifier_block *unused, unsigned long event, v
 		call_netdevice_notifiers(event, br->dev);
 		break;
 	}
+
+	if (event != NETDEV_UNREGISTER)
+		br_vlan_port_event(p, event);
 
 	/* Events that may cause spanning tree to refresh */
 	if (!notified && (event == NETDEV_CHANGEADDR || event == NETDEV_UP ||
@@ -177,6 +185,11 @@ static int br_switchdev_event(struct notifier_block *unused,
 		fdb_info = ptr;
 		br_fdb_offloaded_set(br, p, fdb_info->addr,
 				     fdb_info->vid, fdb_info->offloaded);
+		break;
+	case SWITCHDEV_FDB_FLUSH_TO_BRIDGE:
+		fdb_info = ptr;
+		/* Don't delete static entries */
+		br_fdb_delete_by_port(br, p, fdb_info->vid, 0);
 		break;
 	}
 
@@ -307,7 +320,7 @@ static int __init br_init(void)
 {
 	int err;
 
-	BUILD_BUG_ON(sizeof(struct br_input_skb_cb) > FIELD_SIZEOF(struct sk_buff, cb));
+	BUILD_BUG_ON(sizeof(struct br_input_skb_cb) > sizeof_field(struct sk_buff, cb));
 
 	err = stp_proto_register(&br_stp_proto);
 	if (err < 0) {

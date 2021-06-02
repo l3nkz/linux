@@ -1,14 +1,15 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2014 NVIDIA Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __SOC_TEGRA_MC_H__
 #define __SOC_TEGRA_MC_H__
 
+#include <linux/bits.h>
+#include <linux/debugfs.h>
+#include <linux/err.h>
+#include <linux/interconnect-provider.h>
 #include <linux/reset-controller.h>
 #include <linux/types.h>
 
@@ -77,6 +78,7 @@ struct tegra_smmu_soc {
 
 struct tegra_mc;
 struct tegra_smmu;
+struct gart_device;
 
 #ifdef CONFIG_TEGRA_IOMMU_SMMU
 struct tegra_smmu *tegra_smmu_probe(struct device *dev,
@@ -93,6 +95,28 @@ tegra_smmu_probe(struct device *dev, const struct tegra_smmu_soc *soc,
 
 static inline void tegra_smmu_remove(struct tegra_smmu *smmu)
 {
+}
+#endif
+
+#ifdef CONFIG_TEGRA_IOMMU_GART
+struct gart_device *tegra_gart_probe(struct device *dev, struct tegra_mc *mc);
+int tegra_gart_suspend(struct gart_device *gart);
+int tegra_gart_resume(struct gart_device *gart);
+#else
+static inline struct gart_device *
+tegra_gart_probe(struct device *dev, struct tegra_mc *mc)
+{
+	return ERR_PTR(-ENODEV);
+}
+
+static inline int tegra_gart_suspend(struct gart_device *gart)
+{
+	return -ENODEV;
+}
+
+static inline int tegra_gart_resume(struct gart_device *gart)
+{
+	return -ENODEV;
 }
 #endif
 
@@ -120,6 +144,17 @@ struct tegra_mc_reset_ops {
 			    const struct tegra_mc_reset *rst);
 };
 
+#define TEGRA_MC_ICC_TAG_DEFAULT				0
+#define TEGRA_MC_ICC_TAG_ISO					BIT(0)
+
+struct tegra_mc_icc_ops {
+	int (*set)(struct icc_node *src, struct icc_node *dst);
+	int (*aggregate)(struct icc_node *node, u32 tag, u32 avg_bw,
+			 u32 peak_bw, u32 *agg_avg, u32 *agg_peak);
+	struct icc_node_data *(*xlate_extended)(struct of_phandle_args *spec,
+						void *data);
+};
+
 struct tegra_mc_soc {
 	const struct tegra_mc_client *clients;
 	unsigned int num_clients;
@@ -139,12 +174,17 @@ struct tegra_mc_soc {
 	const struct tegra_mc_reset_ops *reset_ops;
 	const struct tegra_mc_reset *resets;
 	unsigned int num_resets;
+
+	const struct tegra_mc_icc_ops *icc_ops;
+
+	int (*init)(struct tegra_mc *mc);
 };
 
 struct tegra_mc {
 	struct device *dev;
 	struct tegra_smmu *smmu;
-	void __iomem *regs, *regs2;
+	struct gart_device *gart;
+	void __iomem *regs;
 	struct clk *clk;
 	int irq;
 
@@ -156,10 +196,26 @@ struct tegra_mc {
 
 	struct reset_controller_dev reset;
 
+	struct icc_provider provider;
+
 	spinlock_t lock;
+
+	struct {
+		struct dentry *root;
+	} debugfs;
 };
 
-void tegra_mc_write_emem_configuration(struct tegra_mc *mc, unsigned long rate);
+int tegra_mc_write_emem_configuration(struct tegra_mc *mc, unsigned long rate);
 unsigned int tegra_mc_get_emem_device_count(struct tegra_mc *mc);
+
+#ifdef CONFIG_TEGRA_MC
+struct tegra_mc *devm_tegra_memory_controller_get(struct device *dev);
+#else
+static inline struct tegra_mc *
+devm_tegra_memory_controller_get(struct device *dev)
+{
+	return ERR_PTR(-ENODEV);
+}
+#endif
 
 #endif /* __SOC_TEGRA_MC_H__ */

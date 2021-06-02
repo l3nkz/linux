@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 NVIDIA CORPORATION.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/of.h>
@@ -18,6 +15,12 @@ static const struct tegra_mc_client tegra114_mc_clients[] = {
 		.id = 0x00,
 		.name = "ptcr",
 		.swgroup = TEGRA_SWGROUP_PTC,
+		.la = {
+			.reg = 0x34c,
+			.shift = 0,
+			.mask = 0xff,
+			.def = 0x0,
+		},
 	}, {
 		.id = 0x01,
 		.name = "display0a",
@@ -572,7 +575,7 @@ static const struct tegra_mc_client tegra114_mc_clients[] = {
 		},
 	}, {
 		.id = 0x34,
-		.name = "fdcwr2",
+		.name = "fdcdwr2",
 		.swgroup = TEGRA_SWGROUP_NV,
 		.smmu = {
 			.reg = 0x22c,
@@ -912,16 +915,18 @@ static const struct tegra_smmu_swgroup tegra114_swgroups[] = {
 	{ .name = "tsec",      .swgroup = TEGRA_SWGROUP_TSEC,      .reg = 0x294 },
 };
 
-static const unsigned int tegra114_group_display[] = {
+static const unsigned int tegra114_group_drm[] = {
 	TEGRA_SWGROUP_DC,
 	TEGRA_SWGROUP_DCB,
+	TEGRA_SWGROUP_G2,
+	TEGRA_SWGROUP_NV,
 };
 
 static const struct tegra_smmu_group_soc tegra114_groups[] = {
 	{
-		.name = "display",
-		.swgroups = tegra114_group_display,
-		.num_swgroups = ARRAY_SIZE(tegra114_group_display),
+		.name = "drm",
+		.swgroups = tegra114_group_drm,
+		.num_swgroups = ARRAY_SIZE(tegra114_group_drm),
 	},
 };
 
@@ -975,7 +980,7 @@ const struct tegra_mc_soc tegra114_mc_soc = {
 	.smmu = &tegra114_smmu_soc,
 	.intmask = MC_INT_INVALID_SMMU_PAGE | MC_INT_SECURITY_VIOLATION |
 		   MC_INT_DECERR_EMEM,
-	.reset_ops = &terga_mc_reset_ops_common,
+	.reset_ops = &tegra_mc_reset_ops_common,
 	.resets = tegra114_mc_resets,
 	.num_resets = ARRAY_SIZE(tegra114_mc_resets),
 };

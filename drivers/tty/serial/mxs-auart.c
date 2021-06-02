@@ -12,10 +12,6 @@
  * Copyright 2008 Embedded Alley Solutions, Inc All Rights Reserved.
  */
 
-#if defined(CONFIG_SERIAL_MXS_AUART_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
-#define SUPPORT_SYSRQ
-#endif
-
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -37,8 +33,6 @@
 #include <linux/of_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
-
-#include <asm/cacheflush.h>
 
 #include <linux/gpio/consumer.h>
 #include <linux/err.h>
@@ -447,24 +441,16 @@ struct mxs_auart_port {
 	bool			ms_irq_enabled;
 };
 
-static const struct platform_device_id mxs_auart_devtype[] = {
-	{ .name = "mxs-auart-imx23", .driver_data = IMX23_AUART },
-	{ .name = "mxs-auart-imx28", .driver_data = IMX28_AUART },
-	{ .name = "as-auart-asm9260", .driver_data = ASM9260_AUART },
-	{ /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(platform, mxs_auart_devtype);
-
 static const struct of_device_id mxs_auart_dt_ids[] = {
 	{
 		.compatible = "fsl,imx28-auart",
-		.data = &mxs_auart_devtype[IMX28_AUART]
+		.data = (const void *)IMX28_AUART
 	}, {
 		.compatible = "fsl,imx23-auart",
-		.data = &mxs_auart_devtype[IMX23_AUART]
+		.data = (const void *)IMX23_AUART
 	}, {
 		.compatible = "alphascale,asm9260-auart",
-		.data = &mxs_auart_devtype[ASM9260_AUART]
+		.data = (const void *)ASM9260_AUART
 	}, { /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mxs_auart_dt_ids);
@@ -969,10 +955,8 @@ err_out:
 
 }
 
-#define RTS_AT_AUART()	IS_ERR_OR_NULL(mctrl_gpio_to_gpiod(s->gpios,	\
-							UART_GPIO_RTS))
-#define CTS_AT_AUART()	IS_ERR_OR_NULL(mctrl_gpio_to_gpiod(s->gpios,	\
-							UART_GPIO_CTS))
+#define RTS_AT_AUART()	!mctrl_gpio_to_gpiod(s->gpios, UART_GPIO_RTS)
+#define CTS_AT_AUART()	!mctrl_gpio_to_gpiod(s->gpios, UART_GPIO_CTS)
 static void mxs_auart_settermios(struct uart_port *u,
 				 struct ktermios *termios,
 				 struct ktermios *old)
@@ -1549,34 +1533,6 @@ disable_clk_ahb:
 	return err;
 }
 
-/*
- * This function returns 1 if pdev isn't a device instatiated by dt, 0 if it
- * could successfully get all information from dt or a negative errno.
- */
-static int serial_mxs_probe_dt(struct mxs_auart_port *s,
-		struct platform_device *pdev)
-{
-	struct device_node *np = pdev->dev.of_node;
-	int ret;
-
-	if (!np)
-		/* no device tree device */
-		return 1;
-
-	ret = of_alias_get_id(np, "serial");
-	if (ret < 0) {
-		dev_err(&pdev->dev, "failed to get alias id: %d\n", ret);
-		return ret;
-	}
-	s->port.line = ret;
-
-	if (of_get_property(np, "uart-has-rtscts", NULL) ||
-	    of_get_property(np, "fsl,uart-has-rtscts", NULL) /* deprecated */)
-		set_bit(MXS_AUART_RTSCTS, &s->flags);
-
-	return 0;
-}
-
 static int mxs_auart_init_gpios(struct mxs_auart_port *s, struct device *dev)
 {
 	enum mctrl_gpio_idx i;
@@ -1645,8 +1601,7 @@ static int mxs_auart_request_gpio_irq(struct mxs_auart_port *s)
 
 static int mxs_auart_probe(struct platform_device *pdev)
 {
-	const struct of_device_id *of_id =
-			of_match_device(mxs_auart_dt_ids, &pdev->dev);
+	struct device_node *np = pdev->dev.of_node;
 	struct mxs_auart_port *s;
 	u32 version;
 	int ret, irq;
@@ -1659,20 +1614,23 @@ static int mxs_auart_probe(struct platform_device *pdev)
 	s->port.dev = &pdev->dev;
 	s->dev = &pdev->dev;
 
-	ret = serial_mxs_probe_dt(s, pdev);
-	if (ret > 0)
-		s->port.line = pdev->id < 0 ? 0 : pdev->id;
-	else if (ret < 0)
+	ret = of_alias_get_id(np, "serial");
+	if (ret < 0) {
+		dev_err(&pdev->dev, "failed to get alias id: %d\n", ret);
 		return ret;
+	}
+	s->port.line = ret;
+
+	if (of_get_property(np, "uart-has-rtscts", NULL) ||
+	    of_get_property(np, "fsl,uart-has-rtscts", NULL) /* deprecated */)
+		set_bit(MXS_AUART_RTSCTS, &s->flags);
+
 	if (s->port.line >= ARRAY_SIZE(auart_port)) {
 		dev_err(&pdev->dev, "serial%d out of range\n", s->port.line);
 		return -EINVAL;
 	}
 
-	if (of_id) {
-		pdev->id_entry = of_id->data;
-		s->devtype = pdev->id_entry->driver_data;
-	}
+	s->devtype = (enum mxs_auart_type)of_device_get_match_data(&pdev->dev);
 
 	ret = mxs_get_clks(s, pdev);
 	if (ret)
@@ -1686,11 +1644,16 @@ static int mxs_auart_probe(struct platform_device *pdev)
 
 	s->port.mapbase = r->start;
 	s->port.membase = ioremap(r->start, resource_size(r));
+	if (!s->port.membase) {
+		ret = -ENOMEM;
+		goto out_disable_clks;
+	}
 	s->port.ops = &mxs_auart_ops;
 	s->port.iotype = UPIO_MEM;
 	s->port.fifosize = MXS_AUART_FIFO_SIZE;
 	s->port.uartclk = clk_get_rate(s->clk);
 	s->port.type = PORT_IMX;
+	s->port.has_sysrq = IS_ENABLED(CONFIG_SERIAL_MXS_AUART_CONSOLE);
 
 	mxs_init_regs(s);
 
@@ -1699,21 +1662,21 @@ static int mxs_auart_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		ret = irq;
-		goto out_disable_clks;
+		goto out_iounmap;
 	}
 
 	s->port.irq = irq;
 	ret = devm_request_irq(&pdev->dev, irq, mxs_auart_irq_handle, 0,
 			       dev_name(&pdev->dev), s);
 	if (ret)
-		goto out_disable_clks;
+		goto out_iounmap;
 
 	platform_set_drvdata(pdev, s);
 
 	ret = mxs_auart_init_gpios(s, &pdev->dev);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to initialize GPIOs.\n");
-		goto out_disable_clks;
+		goto out_iounmap;
 	}
 
 	/*
@@ -1721,7 +1684,7 @@ static int mxs_auart_probe(struct platform_device *pdev)
 	 */
 	ret = mxs_auart_request_gpio_irq(s);
 	if (ret)
-		goto out_disable_clks;
+		goto out_iounmap;
 
 	auart_port[s->port.line] = s;
 
@@ -1747,6 +1710,9 @@ out_free_qpio_irq:
 	mxs_auart_free_gpio_irq(s);
 	auart_port[pdev->id] = NULL;
 
+out_iounmap:
+	iounmap(s->port.membase);
+
 out_disable_clks:
 	if (is_asm9260_auart(s)) {
 		clk_disable_unprepare(s->clk);
@@ -1762,6 +1728,7 @@ static int mxs_auart_remove(struct platform_device *pdev)
 	uart_remove_one_port(&auart_driver, &s->port);
 	auart_port[pdev->id] = NULL;
 	mxs_auart_free_gpio_irq(s);
+	iounmap(s->port.membase);
 	if (is_asm9260_auart(s)) {
 		clk_disable_unprepare(s->clk);
 		clk_disable_unprepare(s->clk_ahb);

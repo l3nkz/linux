@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  (c) 1999 Andreas Gal		<gal@cs.uni-magdeburg.de>
  *  (c) 2000-2001 Vojtech Pavlik	<vojtech@ucw.cz>
@@ -7,19 +8,6 @@
  */
 
 /*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  *
  * Should you need to contact me, the author, you can do so either by
  * e-mail - mail your message to <vojtech@ucw.cz>, or by paper mail:
@@ -429,6 +417,7 @@ static const struct hid_usage_entry hid_usage_table[] = {
     { 0x85, 0x44, "Charging" },
     { 0x85, 0x45, "Discharging" },
     { 0x85, 0x4b, "NeedReplacement" },
+    { 0x85, 0x65, "AbsoluteStateOfCharge" },
     { 0x85, 0x66, "RemainingCapacity" },
     { 0x85, 0x68, "RunTimeToEmpty" },
     { 0x85, 0x6a, "AverageTimeToFull" },
@@ -1060,9 +1049,14 @@ static int hid_debug_rdesc_show(struct seq_file *f, void *p)
 	seq_printf(f, "\n\n");
 
 	/* dump parsed data and input mappings */
+	if (down_interruptible(&hdev->driver_input_lock))
+		return 0;
+
 	hid_dump_device(hdev, f);
 	seq_printf(f, "\n");
 	hid_dump_input_mapping(hdev, f);
+
+	up(&hdev->driver_input_lock);
 
 	return 0;
 }
@@ -1108,11 +1102,6 @@ static ssize_t hid_debug_events_read(struct file *file, char __user *buffer,
 		set_current_state(TASK_INTERRUPTIBLE);
 
 		while (kfifo_is_empty(&list->hid_debug_fifo)) {
-			if (file->f_flags & O_NONBLOCK) {
-				ret = -EAGAIN;
-				break;
-			}
-
 			if (signal_pending(current)) {
 				ret = -ERESTARTSYS;
 				break;
@@ -1127,6 +1116,11 @@ static ssize_t hid_debug_events_read(struct file *file, char __user *buffer,
 				ret = -EIO;
 				set_current_state(TASK_RUNNING);
 				goto out;
+			}
+
+			if (file->f_flags & O_NONBLOCK) {
+				ret = -EAGAIN;
+				break;
 			}
 
 			/* allow O_NONBLOCK from other threads */

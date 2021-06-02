@@ -28,7 +28,6 @@
 
 #include <drm/ttm/ttm_placement.h>
 
-#include <drm/drmP.h>
 #include "vmwgfx_drv.h"
 #include "ttm_object.h"
 
@@ -107,7 +106,7 @@ int vmw_bo_pin_in_placement(struct vmw_private *dev_priv,
 	if (unlikely(ret != 0))
 		goto err;
 
-	if (buf->pin_count > 0)
+	if (buf->base.pin_count > 0)
 		ret = ttm_bo_mem_compat(placement, &bo->mem,
 					&new_flags) == true ? 0 : -EINVAL;
 	else
@@ -132,7 +131,6 @@ err:
  *
  * @dev_priv:  Driver private.
  * @buf:  DMA buffer to move.
- * @pin:  Pin buffer if true.
  * @interruptible:  Use interruptible wait.
  * Return: Zero on success, Negative error code on failure. In particular
  * -ERESTARTSYS if interrupted by a signal
@@ -156,7 +154,7 @@ int vmw_bo_pin_in_vram_or_gmr(struct vmw_private *dev_priv,
 	if (unlikely(ret != 0))
 		goto err;
 
-	if (buf->pin_count > 0) {
+	if (buf->base.pin_count > 0) {
 		ret = ttm_bo_mem_compat(&vmw_vram_gmr_placement, &bo->mem,
 					&new_flags) == true ? 0 : -EINVAL;
 		goto out_unreserve;
@@ -224,7 +222,7 @@ int vmw_bo_pin_in_start_of_vram(struct vmw_private *dev_priv,
 	uint32_t new_flags;
 
 	place = vmw_vram_placement.placement[0];
-	place.lpfn = bo->num_pages;
+	place.lpfn = bo->mem.num_pages;
 	placement.num_placement = 1;
 	placement.placement = &place;
 	placement.num_busy_placement = 1;
@@ -245,21 +243,21 @@ int vmw_bo_pin_in_start_of_vram(struct vmw_private *dev_priv,
 	 * that situation.
 	 */
 	if (bo->mem.mem_type == TTM_PL_VRAM &&
-	    bo->mem.start < bo->num_pages &&
+	    bo->mem.start < bo->mem.num_pages &&
 	    bo->mem.start > 0 &&
-	    buf->pin_count == 0) {
+	    buf->base.pin_count == 0) {
 		ctx.interruptible = false;
 		(void) ttm_bo_validate(bo, &vmw_sys_placement, &ctx);
 	}
 
-	if (buf->pin_count > 0)
+	if (buf->base.pin_count > 0)
 		ret = ttm_bo_mem_compat(&placement, &bo->mem,
 					&new_flags) == true ? 0 : -EINVAL;
 	else
 		ret = ttm_bo_validate(bo, &placement, &ctx);
 
 	/* For some reason we didn't end up at the start of vram */
-	WARN_ON(ret == 0 && bo->offset != 0);
+	WARN_ON(ret == 0 && bo->mem.start != 0);
 	if (!ret)
 		vmw_bo_pin_reserved(buf, true);
 
@@ -318,7 +316,7 @@ void vmw_bo_get_guest_ptr(const struct ttm_buffer_object *bo,
 {
 	if (bo->mem.mem_type == TTM_PL_VRAM) {
 		ptr->gmrId = SVGA_GMR_FRAMEBUFFER;
-		ptr->offset = bo->offset;
+		ptr->offset = bo->mem.start << PAGE_SHIFT;
 	} else {
 		ptr->gmrId = bo->mem.start;
 		ptr->offset = 0;
@@ -342,23 +340,15 @@ void vmw_bo_pin_reserved(struct vmw_buffer_object *vbo, bool pin)
 	uint32_t old_mem_type = bo->mem.mem_type;
 	int ret;
 
-	lockdep_assert_held(&bo->resv->lock.base);
+	dma_resv_assert_held(bo->base.resv);
 
-	if (pin) {
-		if (vbo->pin_count++ > 0)
-			return;
-	} else {
-		WARN_ON(vbo->pin_count <= 0);
-		if (--vbo->pin_count > 0)
-			return;
-	}
+	if (pin == !!bo->pin_count)
+		return;
 
 	pl.fpfn = 0;
 	pl.lpfn = 0;
-	pl.flags = TTM_PL_FLAG_VRAM | VMW_PL_FLAG_GMR | VMW_PL_FLAG_MOB
-		| TTM_PL_FLAG_SYSTEM | TTM_PL_FLAG_CACHED;
-	if (pin)
-		pl.flags |= TTM_PL_FLAG_NO_EVICT;
+	pl.mem_type = bo->mem.mem_type;
+	pl.flags = bo->mem.placement;
 
 	memset(&placement, 0, sizeof(placement));
 	placement.num_placement = 1;
@@ -367,8 +357,12 @@ void vmw_bo_pin_reserved(struct vmw_buffer_object *vbo, bool pin)
 	ret = ttm_bo_validate(bo, &placement, &ctx);
 
 	BUG_ON(ret != 0 || bo->mem.mem_type != old_mem_type);
-}
 
+	if (pin)
+		ttm_bo_pin(bo);
+	else
+		ttm_bo_unpin(bo);
+}
 
 /**
  * vmw_bo_map_and_cache - Map a buffer object and cache the map
@@ -396,7 +390,7 @@ void *vmw_bo_map_and_cache(struct vmw_buffer_object *vbo)
 	if (virtual)
 		return virtual;
 
-	ret = ttm_bo_kmap(bo, 0, bo->num_pages, &vbo->map);
+	ret = ttm_bo_kmap(bo, 0, bo->mem.num_pages, &vbo->map);
 	if (ret)
 		DRM_ERROR("Buffer object map failed: %d.\n", ret);
 
@@ -463,6 +457,8 @@ void vmw_bo_bo_free(struct ttm_buffer_object *bo)
 {
 	struct vmw_buffer_object *vmw_bo = vmw_buffer_object(bo);
 
+	WARN_ON(vmw_bo->dirty);
+	WARN_ON(!RB_EMPTY_ROOT(&vmw_bo->res_tree));
 	vmw_bo_unmap(vmw_bo);
 	kfree(vmw_bo);
 }
@@ -476,11 +472,65 @@ void vmw_bo_bo_free(struct ttm_buffer_object *bo)
 static void vmw_user_bo_destroy(struct ttm_buffer_object *bo)
 {
 	struct vmw_user_buffer_object *vmw_user_bo = vmw_user_buffer_object(bo);
+	struct vmw_buffer_object *vbo = &vmw_user_bo->vbo;
 
-	vmw_bo_unmap(&vmw_user_bo->vbo);
+	WARN_ON(vbo->dirty);
+	WARN_ON(!RB_EMPTY_ROOT(&vbo->res_tree));
+	vmw_bo_unmap(vbo);
 	ttm_prime_object_kfree(vmw_user_bo, prime);
 }
 
+/**
+ * vmw_bo_create_kernel - Create a pinned BO for internal kernel use.
+ *
+ * @dev_priv: Pointer to the device private struct
+ * @size: size of the BO we need
+ * @placement: where to put it
+ * @p_bo: resulting BO
+ *
+ * Creates and pin a simple BO for in kernel use.
+ */
+int vmw_bo_create_kernel(struct vmw_private *dev_priv, unsigned long size,
+			 struct ttm_placement *placement,
+			 struct ttm_buffer_object **p_bo)
+{
+	unsigned npages = PAGE_ALIGN(size) >> PAGE_SHIFT;
+	struct ttm_operation_ctx ctx = { false, false };
+	struct ttm_buffer_object *bo;
+	size_t acc_size;
+	int ret;
+
+	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
+	if (unlikely(!bo))
+		return -ENOMEM;
+
+	acc_size = ttm_round_pot(sizeof(*bo));
+	acc_size += ttm_round_pot(npages * sizeof(void *));
+	acc_size += ttm_round_pot(sizeof(struct ttm_tt));
+
+	ret = ttm_mem_global_alloc(&ttm_mem_glob, acc_size, &ctx);
+	if (unlikely(ret))
+		goto error_free;
+
+	ret = ttm_bo_init_reserved(&dev_priv->bdev, bo, size,
+				   ttm_bo_type_device, placement, 0,
+				   &ctx, NULL, NULL, NULL);
+	if (unlikely(ret))
+		goto error_account;
+
+	ttm_bo_pin(bo);
+	ttm_bo_unreserve(bo);
+	*p_bo = bo;
+
+	return 0;
+
+error_account:
+	ttm_mem_global_free(&ttm_mem_glob, acc_size);
+
+error_free:
+	kfree(bo);
+	return ret;
+}
 
 /**
  * vmw_bo_init - Initialize a vmw buffer object
@@ -490,6 +540,7 @@ static void vmw_user_bo_destroy(struct ttm_buffer_object *bo)
  * @size: Buffer object size in bytes.
  * @placement: Initial placement.
  * @interruptible: Whether waits should be performed interruptible.
+ * @pin: If the BO should be created pinned at a fixed location.
  * @bo_free: The buffer object destructor.
  * Returns: Zero on success, negative error code on error.
  *
@@ -498,10 +549,11 @@ static void vmw_user_bo_destroy(struct ttm_buffer_object *bo)
 int vmw_bo_init(struct vmw_private *dev_priv,
 		struct vmw_buffer_object *vmw_bo,
 		size_t size, struct ttm_placement *placement,
-		bool interruptible,
+		bool interruptible, bool pin,
 		void (*bo_free)(struct ttm_buffer_object *bo))
 {
-	struct ttm_bo_device *bdev = &dev_priv->bdev;
+	struct ttm_operation_ctx ctx = { interruptible, false };
+	struct ttm_device *bdev = &dev_priv->bdev;
 	size_t acc_size;
 	int ret;
 	bool user = (bo_free == &vmw_user_bo_destroy);
@@ -510,14 +562,26 @@ int vmw_bo_init(struct vmw_private *dev_priv,
 
 	acc_size = vmw_bo_acc_size(dev_priv, size, user);
 	memset(vmw_bo, 0, sizeof(*vmw_bo));
+	BUILD_BUG_ON(TTM_MAX_BO_PRIORITY <= 3);
+	vmw_bo->base.priority = 3;
+	vmw_bo->res_tree = RB_ROOT;
 
-	INIT_LIST_HEAD(&vmw_bo->res_list);
+	ret = ttm_mem_global_alloc(&ttm_mem_glob, acc_size, &ctx);
+	if (unlikely(ret))
+		return ret;
 
-	ret = ttm_bo_init(bdev, &vmw_bo->base, size,
-			  ttm_bo_type_device, placement,
-			  0, interruptible, acc_size,
-			  NULL, NULL, bo_free);
-	return ret;
+	ret = ttm_bo_init_reserved(bdev, &vmw_bo->base, size,
+				   ttm_bo_type_device, placement,
+				   0, &ctx, NULL, NULL, bo_free);
+	if (unlikely(ret)) {
+		ttm_mem_global_free(&ttm_mem_glob, acc_size);
+		return ret;
+	}
+
+	if (pin)
+		ttm_bo_pin(&vmw_bo->base);
+	ttm_bo_unreserve(&vmw_bo->base);
+	return 0;
 }
 
 
@@ -534,7 +598,6 @@ static void vmw_user_bo_release(struct ttm_base_object **p_base)
 {
 	struct vmw_user_buffer_object *vmw_user_bo;
 	struct ttm_base_object *base = *p_base;
-	struct ttm_buffer_object *bo;
 
 	*p_base = NULL;
 
@@ -543,8 +606,7 @@ static void vmw_user_bo_release(struct ttm_base_object **p_base)
 
 	vmw_user_bo = container_of(base, struct vmw_user_buffer_object,
 				   prime.base);
-	bo = &vmw_user_bo->vbo.base;
-	ttm_bo_unref(&bo);
+	ttm_bo_put(&vmw_user_bo->vbo.base);
 }
 
 
@@ -567,7 +629,7 @@ static void vmw_user_bo_ref_obj_release(struct ttm_base_object *base,
 
 	switch (ref_type) {
 	case TTM_REF_SYNCCPU_WRITE:
-		ttm_bo_synccpu_write_release(&user_bo->vbo.base);
+		atomic_dec(&user_bo->vbo.cpu_writers);
 		break;
 	default:
 		WARN_ONCE(true, "Undefined buffer object reference release.\n");
@@ -586,6 +648,7 @@ static void vmw_user_bo_ref_obj_release(struct ttm_base_object *base,
  * @handle: Pointer to where the handle value should be assigned.
  * @p_vbo: Pointer to where the refcounted struct vmw_buffer_object pointer
  * should be assigned.
+ * @p_base: The TTM base object pointer about to be allocated.
  * Return: Zero on success, negative error code on error.
  */
 int vmw_user_bo_alloc(struct vmw_private *dev_priv,
@@ -597,7 +660,6 @@ int vmw_user_bo_alloc(struct vmw_private *dev_priv,
 		      struct ttm_base_object **p_base)
 {
 	struct vmw_user_buffer_object *user_bo;
-	struct ttm_buffer_object *tmp;
 	int ret;
 
 	user_bo = kzalloc(sizeof(*user_bo), GFP_KERNEL);
@@ -609,12 +671,12 @@ int vmw_user_bo_alloc(struct vmw_private *dev_priv,
 	ret = vmw_bo_init(dev_priv, &user_bo->vbo, size,
 			  (dev_priv->has_mob) ?
 			  &vmw_sys_placement :
-			  &vmw_vram_sys_placement, true,
+			  &vmw_vram_sys_placement, true, false,
 			  &vmw_user_bo_destroy);
 	if (unlikely(ret != 0))
 		return ret;
 
-	tmp = ttm_bo_reference(&user_bo->vbo.base);
+	ttm_bo_get(&user_bo->vbo.base);
 	ret = ttm_prime_object_init(tfile,
 				    size,
 				    &user_bo->prime,
@@ -623,7 +685,7 @@ int vmw_user_bo_alloc(struct vmw_private *dev_priv,
 				    &vmw_user_bo_release,
 				    &vmw_user_bo_ref_obj_release);
 	if (unlikely(ret != 0)) {
-		ttm_bo_unref(&tmp);
+		ttm_bo_put(&user_bo->vbo.base);
 		goto out_no_base_object;
 	}
 
@@ -684,16 +746,16 @@ static int vmw_user_bo_synccpu_grab(struct vmw_user_buffer_object *user_bo,
 				    struct ttm_object_file *tfile,
 				    uint32_t flags)
 {
+	bool nonblock = !!(flags & drm_vmw_synccpu_dontblock);
 	struct ttm_buffer_object *bo = &user_bo->vbo.base;
 	bool existed;
 	int ret;
 
 	if (flags & drm_vmw_synccpu_allow_cs) {
-		bool nonblock = !!(flags & drm_vmw_synccpu_dontblock);
 		long lret;
 
-		lret = reservation_object_wait_timeout_rcu
-			(bo->resv, true, true,
+		lret = dma_resv_wait_timeout_rcu
+			(bo->base.resv, true, true,
 			 nonblock ? 0 : MAX_SCHEDULE_TIMEOUT);
 		if (!lret)
 			return -EBUSY;
@@ -702,15 +764,22 @@ static int vmw_user_bo_synccpu_grab(struct vmw_user_buffer_object *user_bo,
 		return 0;
 	}
 
-	ret = ttm_bo_synccpu_write_grab
-		(bo, !!(flags & drm_vmw_synccpu_dontblock));
+	ret = ttm_bo_reserve(bo, true, nonblock, NULL);
+	if (unlikely(ret != 0))
+		return ret;
+
+	ret = ttm_bo_wait(bo, true, nonblock);
+	if (likely(ret == 0))
+		atomic_inc(&user_bo->vbo.cpu_writers);
+
+	ttm_bo_unreserve(bo);
 	if (unlikely(ret != 0))
 		return ret;
 
 	ret = ttm_ref_object_add(tfile, &user_bo->prime.base,
 				 TTM_REF_SYNCCPU_WRITE, &existed, false);
 	if (ret != 0 || existed)
-		ttm_bo_synccpu_write_release(&user_bo->vbo.base);
+		atomic_dec(&user_bo->vbo.cpu_writers);
 
 	return ret;
 }
@@ -838,7 +907,7 @@ int vmw_bo_alloc_ioctl(struct drm_device *dev, void *data,
 		goto out_no_bo;
 
 	rep->handle = handle;
-	rep->map_handle = drm_vma_node_offset_addr(&vbo->base.vma_node);
+	rep->map_handle = drm_vma_node_offset_addr(&vbo->base.base.vma_node);
 	rep->cur_gmr_id = handle;
 	rep->cur_gmr_offset = 0;
 
@@ -911,7 +980,7 @@ int vmw_user_bo_lookup(struct ttm_object_file *tfile,
 
 	vmw_user_bo = container_of(base, struct vmw_user_buffer_object,
 				   prime.base);
-	(void)ttm_bo_reference(&vmw_user_bo->vbo.base);
+	ttm_bo_get(&vmw_user_bo->vbo.base);
 	if (p_base)
 		*p_base = base;
 	else
@@ -1003,17 +1072,17 @@ int vmw_user_bo_reference(struct ttm_object_file *tfile,
 void vmw_bo_fence_single(struct ttm_buffer_object *bo,
 			 struct vmw_fence_obj *fence)
 {
-	struct ttm_bo_device *bdev = bo->bdev;
+	struct ttm_device *bdev = bo->bdev;
 
 	struct vmw_private *dev_priv =
 		container_of(bdev, struct vmw_private, bdev);
 
 	if (fence == NULL) {
 		vmw_execbuf_fence_commands(NULL, dev_priv, &fence, NULL);
-		reservation_object_add_excl_fence(bo->resv, &fence->base);
+		dma_resv_add_excl_fence(bo->base.resv, &fence->base);
 		dma_fence_put(&fence->base);
 	} else
-		reservation_object_add_excl_fence(bo->resv, &fence->base);
+		dma_resv_add_excl_fence(bo->base.resv, &fence->base);
 }
 
 
@@ -1080,7 +1149,7 @@ int vmw_dumb_map_offset(struct drm_file *file_priv,
 	if (ret != 0)
 		return -EINVAL;
 
-	*offset = drm_vma_node_offset_addr(&out_buf->base.vma_node);
+	*offset = drm_vma_node_offset_addr(&out_buf->base.base.vma_node);
 	vmw_bo_unreference(&out_buf);
 	return 0;
 }
@@ -1126,19 +1195,16 @@ void vmw_bo_swap_notify(struct ttm_buffer_object *bo)
  * vmw_bo_move_notify - TTM move_notify_callback
  *
  * @bo: The TTM buffer object about to move.
- * @mem: The struct ttm_mem_reg indicating to what memory
+ * @mem: The struct ttm_resource indicating to what memory
  *       region the move is taking place.
  *
  * Detaches cached maps and device bindings that require that the
  * buffer doesn't move.
  */
 void vmw_bo_move_notify(struct ttm_buffer_object *bo,
-			struct ttm_mem_reg *mem)
+			struct ttm_resource *mem)
 {
 	struct vmw_buffer_object *vbo;
-
-	if (mem == NULL)
-		return;
 
 	/* Make sure @bo is embedded in a struct vmw_buffer_object? */
 	if (bo->destroy != vmw_bo_bo_free &&

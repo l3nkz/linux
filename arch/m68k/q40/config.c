@@ -29,7 +29,6 @@
 
 #include <asm/io.h>
 #include <asm/bootinfo.h>
-#include <asm/pgtable.h>
 #include <asm/setup.h>
 #include <asm/irq.h>
 #include <asm/traps.h>
@@ -38,9 +37,8 @@
 
 extern void q40_init_IRQ(void);
 static void q40_get_model(char *model);
-extern void q40_sched_init(irq_handler_t handler);
+extern void q40_sched_init(void);
 
-static u32 q40_gettimeoffset(void);
 static int q40_hwclk(int, struct rtc_time *);
 static unsigned int q40_get_ss(void);
 static int q40_get_rtc_pll(struct rtc_pll_info *pll);
@@ -169,7 +167,6 @@ void __init config_q40(void)
 	mach_sched_init = q40_sched_init;
 
 	mach_init_IRQ = q40_init_IRQ;
-	arch_gettimeoffset = q40_gettimeoffset;
 	mach_hwclk = q40_hwclk;
 	mach_get_ss = q40_get_ss;
 	mach_get_rtc_pll = q40_get_rtc_pll;
@@ -188,11 +185,6 @@ void __init config_q40(void)
 
 	/* disable a few things that SMSQ might have left enabled */
 	q40_disable_irqs();
-
-	/* no DMA at all, but ide-scsi requires it.. make sure
-	 * all physical RAM fits into the boundary - otherwise
-	 * allocator may play costly and useless tricks */
-	mach_max_dma_address = 1024*1024*1024;
 }
 
 
@@ -200,13 +192,6 @@ int __init q40_parse_bootinfo(const struct bi_record *rec)
 {
 	return 1;
 }
-
-
-static u32 q40_gettimeoffset(void)
-{
-	return 5000 * (ql_ticks != 0) * 1000;
-}
-
 
 /*
  * Looks like op is non-zero for setting the clock, and zero for
@@ -273,6 +258,7 @@ static int q40_get_rtc_pll(struct rtc_pll_info *pll)
 {
 	int tmp = Q40_RTC_CTRL;
 
+	pll->pll_ctrl = 0;
 	pll->pll_value = tmp & Q40_RTC_PLL_MASK;
 	if (tmp & Q40_RTC_PLL_SIGN)
 		pll->pll_value = -pll->pll_value;

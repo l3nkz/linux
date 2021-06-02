@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * SCSI Primary Commands (SPC) parsing and emulation.
  *
  * (c) Copyright 2002-2013 Datera, Inc.
  *
  * Nicholas A. Bellinger <nab@kernel.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 #include <linux/kernel.h>
@@ -714,7 +701,6 @@ static sense_reason_t
 spc_emulate_inquiry(struct se_cmd *cmd)
 {
 	struct se_device *dev = cmd->se_dev;
-	struct se_portal_group *tpg = cmd->se_lun->lun_tpg;
 	unsigned char *rbuf;
 	unsigned char *cdb = cmd->t_task_cdb;
 	unsigned char *buf;
@@ -728,10 +714,7 @@ spc_emulate_inquiry(struct se_cmd *cmd)
 		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 	}
 
-	if (dev == rcu_access_pointer(tpg->tpg_virt_lun0->lun_se_dev))
-		buf[0] = 0x3f; /* Not connected */
-	else
-		buf[0] = dev->transport->get_device_type(dev);
+	buf[0] = dev->transport->get_device_type(dev);
 
 	if (!(cdb[1] & 0x1)) {
 		if (cdb[2]) {
@@ -860,8 +843,17 @@ static int spc_modesense_control(struct se_cmd *cmd, u8 pc, u8 *p)
 	 * for a BUSY, TASK SET FULL, or RESERVATION CONFLICT status regardless
 	 * to the number of commands completed with one of those status codes.
 	 */
-	p[4] = (dev->dev_attrib.emulate_ua_intlck_ctrl == 2) ? 0x30 :
-	       (dev->dev_attrib.emulate_ua_intlck_ctrl == 1) ? 0x20 : 0x00;
+	switch (dev->dev_attrib.emulate_ua_intlck_ctrl) {
+	case TARGET_UA_INTLCK_CTRL_ESTABLISH_UA:
+		p[4] = 0x30;
+		break;
+	case TARGET_UA_INTLCK_CTRL_NO_CLEAR:
+		p[4] = 0x20;
+		break;
+	default:	/* TARGET_UA_INTLCK_CTRL_CLEAR */
+		p[4] = 0x00;
+		break;
+	}
 	/*
 	 * From spc4r17, section 7.4.6 Control mode Page
 	 *

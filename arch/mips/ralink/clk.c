@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- *  This program is free software; you can redistribute it and/or modify it
- *  under the terms of the GNU General Public License version 2 as published
- *  by the Free Software Foundation.
  *
  *  Copyright (C) 2011 Gabor Juhos <juhosg@openwrt.org>
  *  Copyright (C) 2013 John Crispin <john@phrozen.org>
@@ -71,6 +69,20 @@ long clk_round_rate(struct clk *clk, unsigned long rate)
 	return -1;
 }
 EXPORT_SYMBOL_GPL(clk_round_rate);
+
+int clk_set_parent(struct clk *clk, struct clk *parent)
+{
+	WARN_ON(clk);
+	return -1;
+}
+EXPORT_SYMBOL_GPL(clk_set_parent);
+
+struct clk *clk_get_parent(struct clk *clk)
+{
+	WARN_ON(clk);
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(clk_get_parent);
 
 void __init plat_time_init(void)
 {

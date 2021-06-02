@@ -22,7 +22,7 @@
  * So, THIS CODE CAN DESTROY OTi-6858 AND ANY OTHER DEVICES, THAT ARE
  * CONNECTED TO IT!
  *
- * See Documentation/usb/usb-serial.txt for more information on using this
+ * See Documentation/usb/usb-serial.rst for more information on using this
  * driver
  *
  * TODO:
@@ -132,7 +132,7 @@ static int oti6858_tiocmget(struct tty_struct *tty);
 static int oti6858_tiocmset(struct tty_struct *tty,
 				unsigned int set, unsigned int clear);
 static int oti6858_port_probe(struct usb_serial_port *port);
-static int oti6858_port_remove(struct usb_serial_port *port);
+static void oti6858_port_remove(struct usb_serial_port *port);
 
 /* device info */
 static struct usb_serial_driver oti6858_device = {
@@ -344,14 +344,12 @@ static int oti6858_port_probe(struct usb_serial_port *port)
 	return 0;
 }
 
-static int oti6858_port_remove(struct usb_serial_port *port)
+static void oti6858_port_remove(struct usb_serial_port *port)
 {
 	struct oti6858_private *priv;
 
 	priv = usb_get_serial_port_data(port);
 	kfree(priv);
-
-	return 0;
 }
 
 static int oti6858_write(struct tty_struct *tty, struct usb_serial_port *port,
@@ -393,10 +391,7 @@ static int oti6858_chars_in_buffer(struct tty_struct *tty)
 
 static void oti6858_init_termios(struct tty_struct *tty)
 {
-	tty->termios = tty_std_termios;
-	tty->termios.c_cflag = B38400 | CS8 | CREAD | HUPCL | CLOCAL;
-	tty->termios.c_ispeed = 38400;
-	tty->termios.c_ospeed = 38400;
+	tty_encode_baud_rate(tty, 38400, 38400);
 }
 
 static void oti6858_set_termios(struct tty_struct *tty,

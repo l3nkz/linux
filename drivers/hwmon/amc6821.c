@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * amc6821.c - Part of lm_sensors, Linux kernel modules for hardware
  *	       monitoring
@@ -5,20 +6,6 @@
  *
  * Based on max6650.c:
  * Copyright (C) 2007 Hans J. Koch <hjk@hansjkoch.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>	/* Needed for KERN_INFO */
@@ -913,8 +900,7 @@ static int amc6821_init_client(struct i2c_client *client)
 	return 0;
 }
 
-static int amc6821_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int amc6821_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct amc6821_data *data;
@@ -953,7 +939,7 @@ static struct i2c_driver amc6821_driver = {
 	.driver = {
 		.name	= "amc6821",
 	},
-	.probe = amc6821_probe,
+	.probe_new = amc6821_probe,
 	.id_table = amc6821_id,
 	.detect = amc6821_detect,
 	.address_list = normal_i2c,

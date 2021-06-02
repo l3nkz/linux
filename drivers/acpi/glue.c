@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Link physical devices with ACPI devices support
  *
  * Copyright (c) 2005 David Shaohua Li <shaohua.li@intel.com>
  * Copyright (c) 2005 Intel Corp.
- *
- * This file is released under the GPLv2.
  */
 
 #include <linux/acpi_iort.h>
@@ -191,7 +190,7 @@ int acpi_bind_one(struct device *dev, struct acpi_device *acpi_dev)
 	if (!acpi_dev)
 		return -EINVAL;
 
-	get_device(&acpi_dev->dev);
+	acpi_dev_get(acpi_dev);
 	get_device(dev);
 	physical_node = kzalloc(sizeof(*physical_node), GFP_KERNEL);
 	if (!physical_node) {
@@ -218,7 +217,7 @@ int acpi_bind_one(struct device *dev, struct acpi_device *acpi_dev)
 				goto err;
 
 			put_device(dev);
-			put_device(&acpi_dev->dev);
+			acpi_dev_put(acpi_dev);
 			return 0;
 		}
 		if (pn->node_id == node_id) {
@@ -258,7 +257,7 @@ int acpi_bind_one(struct device *dev, struct acpi_device *acpi_dev)
  err:
 	ACPI_COMPANION_SET(dev, NULL);
 	put_device(dev);
-	put_device(&acpi_dev->dev);
+	acpi_dev_put(acpi_dev);
 	return retval;
 }
 EXPORT_SYMBOL_GPL(acpi_bind_one);
@@ -286,7 +285,7 @@ int acpi_unbind_one(struct device *dev)
 			ACPI_COMPANION_SET(dev, NULL);
 			/* Drop references taken by acpi_bind_one(). */
 			put_device(dev);
-			put_device(&acpi_dev->dev);
+			acpi_dev_put(acpi_dev);
 			kfree(entry);
 			break;
 		}

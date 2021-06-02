@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -7,11 +8,6 @@
  *
  * Authors:	Many, reorganised here by
  * 		Arnaldo Carvalho de Melo <acme@mandriva.com>
- *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU General Public License
- *		as published by the Free Software Foundation; either version
- *		2 of the License, or (at your option) any later version.
  */
 #ifndef _INET_SOCK_H
 #define _INET_SOCK_H
@@ -56,7 +52,7 @@ struct ip_options {
 	unsigned char	router_alert;
 	unsigned char	cipso;
 	unsigned char	__pad2;
-	unsigned char	__data[0];
+	unsigned char	__data[];
 };
 
 struct ip_options_rcu {
@@ -164,6 +160,7 @@ struct inet_cork {
 	char			priority;
 	__u16			gso_size;
 	u64			transmit_time;
+	u32			mark;
 };
 
 struct inet_cork_full {
@@ -228,6 +225,7 @@ struct inet_sock {
 				mc_all:1,
 				nodefrag:1;
 	__u8			bind_address_no_port:1,
+				recverr_rfc4884:1,
 				defer_connect:1; /* Indicates that fastopen_connect is set
 						  * and cookie exists so we defer connect
 						  * until first data frame is written
@@ -298,13 +296,6 @@ static inline void __inet_sk_copy_descendant(struct sock *sk_to,
 	memcpy(inet_sk(sk_to) + 1, inet_sk(sk_from) + 1,
 	       sk_from->sk_prot->obj_size - ancestor_size);
 }
-#if !(IS_ENABLED(CONFIG_IPV6))
-static inline void inet_sk_copy_descendant(struct sock *sk_to,
-					   const struct sock *sk_from)
-{
-	__inet_sk_copy_descendant(sk_to, sk_from, sizeof(struct inet_sock));
-}
-#endif
 
 int inet_sk_rebuild_header(struct sock *sk);
 

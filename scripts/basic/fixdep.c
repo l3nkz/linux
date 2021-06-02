@@ -34,7 +34,7 @@
  * the config symbols are rebuilt.
  *
  * So if the user changes his CONFIG_HIS_DRIVER option, only the objects
- * which depend on "include/config/his/driver.h" will be rebuilt,
+ * which depend on "include/config/HIS_DRIVER" will be rebuilt,
  * so most likely only his driver ;-)
  *
  * The idea above dates, by the way, back to Michael E Chastain, AFAIK.
@@ -74,13 +74,8 @@
  *
  * and then basically copies the .<target>.d file to stdout, in the
  * process filtering out the dependency on autoconf.h and adding
- * dependencies on include/config/my/option.h for every
+ * dependencies on include/config/MY_OPTION for every
  * CONFIG_MY_OPTION encountered in any of the prerequisites.
- *
- * It will also filter out all the dependencies on *.ver. We need
- * to make sure that the generated version checksum are globally up
- * to date before even starting the recursive build, so it's too late
- * at this point anyway.
  *
  * We don't even try to really parse the header files, but
  * merely grep, i.e. if CONFIG_FOO is mentioned in a comment, it will
@@ -99,6 +94,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -110,31 +106,29 @@ static void usage(void)
 }
 
 /*
- * Print out a dependency path from a symbol name
+ * In the intended usage of this program, the stdout is redirected to .*.cmd
+ * files. The return value of printf() must be checked to catch any error,
+ * e.g. "No space left on device".
  */
-static void print_dep(const char *m, int slen, const char *dir)
+static void xprintf(const char *format, ...)
 {
-	int c, prev_c = '/', i;
+	va_list ap;
+	int ret;
 
-	printf("    $(wildcard %s/", dir);
-	for (i = 0; i < slen; i++) {
-		c = m[i];
-		if (c == '_')
-			c = '/';
-		else
-			c = tolower(c);
-		if (c != '/' || prev_c != '/')
-			putchar(c);
-		prev_c = c;
+	va_start(ap, format);
+	ret = vprintf(format, ap);
+	if (ret < 0) {
+		perror("fixdep");
+		exit(1);
 	}
-	printf(".h) \\\n");
+	va_end(ap);
 }
 
 struct item {
 	struct item	*next;
 	unsigned int	len;
 	unsigned int	hash;
-	char		name[0];
+	char		name[];
 };
 
 #define HASHSZ 256
@@ -194,7 +188,8 @@ static void use_config(const char *m, int slen)
 	    return;
 
 	define_config(m, slen, hash);
-	print_dep(m, slen, "include/config");
+	/* Print out a dependency path from a symbol name. */
+	xprintf("    $(wildcard include/config/%.*s) \\\n", slen, m);
 }
 
 /* test if s ends in sub */
@@ -220,7 +215,7 @@ static void parse_config_file(const char *p)
 		}
 		p += 7;
 		q = p;
-		while (*q && (isalnum(*q) || *q == '_'))
+		while (isalnum(*q) || *q == '_')
 			q++;
 		if (str_ends_with(p, q - p, "_MODULE"))
 			r = q - 7;
@@ -268,8 +263,7 @@ static void *read_file(const char *filename)
 static int is_ignored_file(const char *s, int len)
 {
 	return str_ends_with(s, len, "include/generated/autoconf.h") ||
-	       str_ends_with(s, len, "include/generated/autoksyms.h") ||
-	       str_ends_with(s, len, ".ver");
+	       str_ends_with(s, len, "include/generated/autoksyms.h");
 }
 
 /*
@@ -324,13 +318,13 @@ static void parse_dep_file(char *m, const char *target)
 				 */
 				if (!saw_any_target) {
 					saw_any_target = 1;
-					printf("source_%s := %s\n\n",
-					       target, m);
-					printf("deps_%s := \\\n", target);
+					xprintf("source_%s := %s\n\n",
+						target, m);
+					xprintf("deps_%s := \\\n", target);
 				}
 				is_first_dep = 0;
 			} else {
-				printf("  %s \\\n", m);
+				xprintf("  %s \\\n", m);
 			}
 
 			buf = read_file(m);
@@ -353,8 +347,8 @@ static void parse_dep_file(char *m, const char *target)
 		exit(1);
 	}
 
-	printf("\n%s: $(deps_%s)\n\n", target, target);
-	printf("$(deps_%s):\n", target);
+	xprintf("\n%s: $(deps_%s)\n\n", target, target);
+	xprintf("$(deps_%s):\n", target);
 }
 
 int main(int argc, char *argv[])
@@ -369,7 +363,7 @@ int main(int argc, char *argv[])
 	target = argv[2];
 	cmdline = argv[3];
 
-	printf("cmd_%s := %s\n\n", target, cmdline);
+	xprintf("cmd_%s := %s\n\n", target, cmdline);
 
 	buf = read_file(depfile);
 	parse_dep_file(buf, target);

@@ -12,6 +12,22 @@
 
 #define DM_MSG_PREFIX "core-rq"
 
+/*
+ * One of these is allocated per request.
+ */
+struct dm_rq_target_io {
+	struct mapped_device *md;
+	struct dm_target *ti;
+	struct request *orig, *clone;
+	struct kthread_work work;
+	blk_status_t error;
+	union map_info info;
+	struct dm_stats_aux stats_aux;
+	unsigned long duration_jiffies;
+	unsigned n_sectors;
+	unsigned completed;
+};
+
 #define DM_MQ_NR_HW_QUEUES 1
 #define DM_MQ_QUEUE_DEPTH 2048
 static unsigned dm_mq_nr_hw_queues = DM_MQ_NR_HW_QUEUES;
@@ -54,9 +70,6 @@ void dm_start_queue(struct request_queue *q)
 
 void dm_stop_queue(struct request_queue *q)
 {
-	if (blk_mq_queue_stopped(q))
-		return;
-
 	blk_mq_quiesce_queue(q);
 }
 
@@ -99,7 +112,7 @@ static void end_clone_bio(struct bio *clone)
 
 	/*
 	 * Update the original request.
-	 * Do not use blk_end_request() here, because it may complete
+	 * Do not use blk_mq_end_request() here, because it may complete
 	 * the original request before the clone, and break the ordering.
 	 */
 	if (is_last)
@@ -130,10 +143,6 @@ static void rq_end_stats(struct mapped_device *md, struct request *orig)
  */
 static void rq_completed(struct mapped_device *md)
 {
-	/* nudge anyone waiting on suspend queue */
-	if (unlikely(wq_has_sleeper(&md->wait)))
-		wake_up(&md->wait);
-
 	/*
 	 * dm_put() must be at the end of this function. See the comment above
 	 */
@@ -152,7 +161,7 @@ static void dm_end_request(struct request *clone, blk_status_t error)
 	struct request *rq = tio->orig;
 
 	blk_rq_unprep_clone(clone);
-	tio->ti->type->release_clone_rq(clone);
+	tio->ti->type->release_clone_rq(clone, NULL);
 
 	rq_end_stats(md, rq);
 	blk_mq_end_request(rq, error);
@@ -166,7 +175,7 @@ static void __dm_mq_kick_requeue_list(struct request_queue *q, unsigned long mse
 
 void dm_mq_kick_requeue_list(struct mapped_device *md)
 {
-	__dm_mq_kick_requeue_list(dm_get_md_queue(md), 0);
+	__dm_mq_kick_requeue_list(md->queue, 0);
 }
 EXPORT_SYMBOL(dm_mq_kick_requeue_list);
 
@@ -185,7 +194,7 @@ static void dm_requeue_original_request(struct dm_rq_target_io *tio, bool delay_
 	rq_end_stats(md, rq);
 	if (tio->clone) {
 		blk_rq_unprep_clone(tio->clone);
-		tio->ti->type->release_clone_rq(tio->clone);
+		tio->ti->type->release_clone_rq(tio->clone, NULL);
 	}
 
 	dm_mq_delay_requeue_request(rq, delay_ms);
@@ -206,11 +215,14 @@ static void dm_done(struct request *clone, blk_status_t error, bool mapped)
 	}
 
 	if (unlikely(error == BLK_STS_TARGET)) {
-		if (req_op(clone) == REQ_OP_WRITE_SAME &&
-		    !clone->q->limits.max_write_same_sectors)
+		if (req_op(clone) == REQ_OP_DISCARD &&
+		    !clone->q->limits.max_discard_sectors)
+			disable_discard(tio->md);
+		else if (req_op(clone) == REQ_OP_WRITE_SAME &&
+			 !clone->q->limits.max_write_same_sectors)
 			disable_write_same(tio->md);
-		if (req_op(clone) == REQ_OP_WRITE_ZEROES &&
-		    !clone->q->limits.max_write_zeroes_sectors)
+		else if (req_op(clone) == REQ_OP_WRITE_ZEROES &&
+			 !clone->q->limits.max_write_zeroes_sectors)
 			disable_write_zeroes(tio->md);
 	}
 
@@ -269,7 +281,8 @@ static void dm_complete_request(struct request *rq, blk_status_t error)
 	struct dm_rq_target_io *tio = tio_from_request(rq);
 
 	tio->error = error;
-	blk_mq_complete_request(rq);
+	if (likely(!blk_should_fake_timeout(rq->q)))
+		blk_mq_complete_request(rq);
 }
 
 /*
@@ -379,17 +392,18 @@ static int map_request(struct dm_rq_target_io *tio)
 	case DM_MAPIO_REMAPPED:
 		if (setup_clone(clone, rq, tio, GFP_ATOMIC)) {
 			/* -ENOMEM */
-			ti->type->release_clone_rq(clone);
+			ti->type->release_clone_rq(clone, &tio->info);
 			return DM_MAPIO_REQUEUE;
 		}
 
 		/* The target has remapped the I/O so dispatch it */
-		trace_block_rq_remap(clone->q, clone, disk_devt(dm_disk(md)),
+		trace_block_rq_remap(clone, disk_devt(dm_disk(md)),
 				     blk_rq_pos(rq));
 		ret = dm_dispatch_clone_request(clone, rq);
 		if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE) {
 			blk_rq_unprep_clone(clone);
-			tio->ti->type->release_clone_rq(clone);
+			blk_mq_cleanup_rq(clone);
+			tio->ti->type->release_clone_rq(clone, &tio->info);
 			tio->clone = NULL;
 			return DM_MAPIO_REQUEUE;
 		}
@@ -527,7 +541,7 @@ int dm_mq_init_request_queue(struct mapped_device *md, struct dm_table *t)
 	md->tag_set->ops = &dm_mq_ops;
 	md->tag_set->queue_depth = dm_get_blk_mq_queue_depth();
 	md->tag_set->numa_node = md->numa_node_id;
-	md->tag_set->flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_SG_MERGE;
+	md->tag_set->flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_STACKING;
 	md->tag_set->nr_hw_queues = dm_get_blk_mq_nr_hw_queues();
 	md->tag_set->driver_data = md;
 
@@ -543,7 +557,7 @@ int dm_mq_init_request_queue(struct mapped_device *md, struct dm_table *t)
 	if (err)
 		goto out_kfree_tag_set;
 
-	q = blk_mq_init_allocated_queue(md->tag_set, md->queue);
+	q = blk_mq_init_allocated_queue(md->tag_set, md->queue, true);
 	if (IS_ERR(q)) {
 		err = PTR_ERR(q);
 		goto out_tag_set;
@@ -555,6 +569,7 @@ out_tag_set:
 	blk_mq_free_tag_set(md->tag_set);
 out_kfree_tag_set:
 	kfree(md->tag_set);
+	md->tag_set = NULL;
 
 	return err;
 }
@@ -564,6 +579,7 @@ void dm_mq_cleanup_mapped_device(struct mapped_device *md)
 	if (md->tag_set) {
 		blk_mq_free_tag_set(md->tag_set);
 		kfree(md->tag_set);
+		md->tag_set = NULL;
 	}
 }
 

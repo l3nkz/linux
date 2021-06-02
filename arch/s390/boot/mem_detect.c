@@ -8,7 +8,6 @@
 #include "compressed/decompressor.h"
 #include "boot.h"
 
-unsigned long __bootdata(max_physmem_end);
 struct mem_detect_info __bootdata(mem_detect);
 
 /* up to 256 storage elements, 1020 subincrements each */
@@ -25,7 +24,7 @@ static void *mem_detect_alloc_extended(void)
 {
 	unsigned long offset = ALIGN(mem_safe_offset(), sizeof(u64));
 
-	if (IS_ENABLED(BLK_DEV_INITRD) && INITRD_START && INITRD_SIZE &&
+	if (IS_ENABLED(CONFIG_BLK_DEV_INITRD) && INITRD_START && INITRD_SIZE &&
 	    INITRD_START < offset + ENTRIES_EXTENDED_MAX)
 		offset = ALIGN(INITRD_START + INITRD_SIZE, sizeof(u64));
 
@@ -61,13 +60,6 @@ void add_mem_detect_block(u64 start, u64 end)
 	block->start = start;
 	block->end = end;
 	mem_detect.count++;
-}
-
-static unsigned long get_mem_detect_end(void)
-{
-	if (mem_detect.count)
-		return __get_mem_detect_block_ptr(mem_detect.count - 1)->end;
-	return 0;
 }
 
 static int __diag260(unsigned long rx1, unsigned long rx2)
@@ -156,27 +148,29 @@ static void search_mem_end(void)
 	add_mem_detect_block(0, (offset + 1) << 20);
 }
 
-void detect_memory(void)
+unsigned long detect_memory(void)
 {
+	unsigned long max_physmem_end;
+
 	sclp_early_get_memsize(&max_physmem_end);
 
 	if (!sclp_early_read_storage_info()) {
 		mem_detect.info_source = MEM_DETECT_SCLP_STOR_INFO;
-		return;
+		return max_physmem_end;
 	}
 
 	if (!diag260()) {
 		mem_detect.info_source = MEM_DETECT_DIAG260;
-		return;
+		return max_physmem_end;
 	}
 
 	if (max_physmem_end) {
 		add_mem_detect_block(0, max_physmem_end);
 		mem_detect.info_source = MEM_DETECT_SCLP_READ_INFO;
-		return;
+		return max_physmem_end;
 	}
 
 	search_mem_end();
 	mem_detect.info_source = MEM_DETECT_BIN_SEARCH;
-	max_physmem_end = get_mem_detect_end();
+	return get_mem_detect_end();
 }

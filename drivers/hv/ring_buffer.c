@@ -1,25 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
  * Copyright (c) 2009, Microsoft Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
  *
  * Authors:
  *   Haiyang Zhang <haiyangz@microsoft.com>
  *   Hank Janssen  <hjanssen@microsoft.com>
  *   K. Y. Srinivasan <kys@microsoft.com>
- *
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -74,8 +61,10 @@ static void hv_signal_on_write(u32 old_write, struct vmbus_channel *channel)
 	 * This is the only case we need to signal when the
 	 * ring transitions from being empty to non-empty.
 	 */
-	if (old_write == READ_ONCE(rbi->ring_buffer->read_index))
+	if (old_write == READ_ONCE(rbi->ring_buffer->read_index)) {
+		++channel->intr_out_empty;
 		vmbus_setevent(channel);
+	}
 }
 
 /* Get the next write location for the specified ring buffer. */
@@ -93,15 +82,6 @@ hv_set_next_write_location(struct hv_ring_buffer_info *ring_info,
 		     u32 next_write_location)
 {
 	ring_info->ring_buffer->write_index = next_write_location;
-}
-
-/* Set the next read location for the specified ring buffer. */
-static inline void
-hv_set_next_read_location(struct hv_ring_buffer_info *ring_info,
-		    u32 next_read_location)
-{
-	ring_info->ring_buffer->read_index = next_read_location;
-	ring_info->priv_read_index = next_read_location;
 }
 
 /* Get the size of the ring buffer. */
@@ -164,14 +144,18 @@ hv_get_ringbuffer_availbytes(const struct hv_ring_buffer_info *rbi,
 }
 
 /* Get various debug metrics for the specified ring buffer. */
-int hv_ringbuffer_get_debuginfo(const struct hv_ring_buffer_info *ring_info,
+int hv_ringbuffer_get_debuginfo(struct hv_ring_buffer_info *ring_info,
 				struct hv_ring_buffer_debug_info *debug_info)
 {
 	u32 bytes_avail_towrite;
 	u32 bytes_avail_toread;
 
-	if (!ring_info->ring_buffer)
+	mutex_lock(&ring_info->ring_buffer_mutex);
+
+	if (!ring_info->ring_buffer) {
+		mutex_unlock(&ring_info->ring_buffer_mutex);
 		return -EINVAL;
+	}
 
 	hv_get_ringbuffer_availbytes(ring_info,
 				     &bytes_avail_toread,
@@ -182,9 +166,18 @@ int hv_ringbuffer_get_debuginfo(const struct hv_ring_buffer_info *ring_info,
 	debug_info->current_write_index = ring_info->ring_buffer->write_index;
 	debug_info->current_interrupt_mask
 		= ring_info->ring_buffer->interrupt_mask;
+	mutex_unlock(&ring_info->ring_buffer_mutex);
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(hv_ringbuffer_get_debuginfo);
+
+/* Initialize a channel's ring buffer info mutex locks */
+void hv_ringbuffer_pre_init(struct vmbus_channel *channel)
+{
+	mutex_init(&channel->inbound.ring_buffer_mutex);
+	mutex_init(&channel->outbound.ring_buffer_mutex);
+}
 
 /* Initialize the ring buffer. */
 int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
@@ -194,8 +187,6 @@ int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
 	struct page **pages_wraparound;
 
 	BUILD_BUG_ON((sizeof(struct hv_ring_buffer) != PAGE_SIZE));
-
-	memset(ring_info, 0, sizeof(struct hv_ring_buffer_info));
 
 	/*
 	 * First page holds struct hv_ring_buffer, do wraparound mapping for
@@ -230,6 +221,7 @@ int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
 		reciprocal_value(ring_info->ring_size / 10);
 	ring_info->ring_datasize = ring_info->ring_size -
 		sizeof(struct hv_ring_buffer);
+	ring_info->priv_read_index = 0;
 
 	spin_lock_init(&ring_info->ring_lock);
 
@@ -239,13 +231,16 @@ int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
 /* Cleanup the ring buffer. */
 void hv_ringbuffer_cleanup(struct hv_ring_buffer_info *ring_info)
 {
+	mutex_lock(&ring_info->ring_buffer_mutex);
 	vunmap(ring_info->ring_buffer);
 	ring_info->ring_buffer = NULL;
+	mutex_unlock(&ring_info->ring_buffer_mutex);
 }
 
 /* Write to the ring buffer. */
 int hv_ringbuffer_write(struct vmbus_channel *channel,
-			const struct kvec *kv_list, u32 kv_count)
+			const struct kvec *kv_list, u32 kv_count,
+			u64 requestid)
 {
 	int i;
 	u32 bytes_avail_towrite;
@@ -255,6 +250,8 @@ int hv_ringbuffer_write(struct vmbus_channel *channel,
 	u64 prev_indices;
 	unsigned long flags;
 	struct hv_ring_buffer_info *outring_info = &channel->outbound;
+	struct vmpacket_descriptor *desc = kv_list[0].iov_base;
+	u64 rqst_id = VMBUS_NO_RQSTOR;
 
 	if (channel->rescind)
 		return -ENODEV;
@@ -272,9 +269,18 @@ int hv_ringbuffer_write(struct vmbus_channel *channel,
 	 * is empty since the read index == write index.
 	 */
 	if (bytes_avail_towrite <= totalbytes_towrite) {
+		++channel->out_full_total;
+
+		if (!channel->out_full_flag) {
+			++channel->out_full_first;
+			channel->out_full_flag = true;
+		}
+
 		spin_unlock_irqrestore(&outring_info->ring_lock, flags);
 		return -EAGAIN;
 	}
+
+	channel->out_full_flag = false;
 
 	/* Write to the ring buffer */
 	next_write_location = hv_get_next_write_location(outring_info);
@@ -287,6 +293,22 @@ int hv_ringbuffer_write(struct vmbus_channel *channel,
 						     kv_list[i].iov_base,
 						     kv_list[i].iov_len);
 	}
+
+	/*
+	 * Allocate the request ID after the data has been copied into the
+	 * ring buffer.  Once this request ID is allocated, the completion
+	 * path could find the data and free it.
+	 */
+
+	if (desc->flags == VMBUS_DATA_PACKET_FLAG_COMPLETION_REQUESTED) {
+		rqst_id = vmbus_next_request_id(&channel->requestor, requestid);
+		if (rqst_id == VMBUS_RQST_ERROR) {
+			spin_unlock_irqrestore(&outring_info->ring_lock, flags);
+			return -EAGAIN;
+		}
+	}
+	desc = hv_get_ring_buffer(outring_info) + old_write;
+	desc->trans_id = (rqst_id == VMBUS_NO_RQSTOR) ? requestid : rqst_id;
 
 	/* Set previous packet start */
 	prev_indices = hv_get_ring_bufferindices(outring_info);
@@ -307,8 +329,13 @@ int hv_ringbuffer_write(struct vmbus_channel *channel,
 
 	hv_signal_on_write(old_write, channel);
 
-	if (channel->rescind)
+	if (channel->rescind) {
+		if (rqst_id != VMBUS_NO_RQSTOR) {
+			/* Reclaim request ID to avoid leak of IDs */
+			vmbus_request_addr(&channel->requestor, rqst_id);
+		}
 		return -ENODEV;
+	}
 
 	return 0;
 }
@@ -384,6 +411,7 @@ struct vmpacket_descriptor *hv_pkt_iter_first(struct vmbus_channel *channel)
 	struct hv_ring_buffer_info *rbi = &channel->inbound;
 	struct vmpacket_descriptor *desc;
 
+	hv_debug_delay_test(channel, MESSAGE_DELAY);
 	if (hv_pkt_iter_avail(rbi) < sizeof(struct vmpacket_descriptor))
 		return NULL;
 
@@ -409,6 +437,7 @@ __hv_pkt_iter_next(struct vmbus_channel *channel,
 	u32 packetlen = desc->len8 << 3;
 	u32 dsize = rbi->ring_datasize;
 
+	hv_debug_delay_test(channel, MESSAGE_DELAY);
 	/* bump offset to next potential packet */
 	rbi->priv_read_index += packetlen + VMBUS_PKT_TRAILER;
 	if (rbi->priv_read_index >= dsize)
@@ -530,6 +559,7 @@ void hv_pkt_iter_close(struct vmbus_channel *channel)
 	if (curr_write_sz <= pending_sz)
 		return;
 
+	++channel->intr_in_full;
 	vmbus_setevent(channel);
 }
 EXPORT_SYMBOL_GPL(hv_pkt_iter_close);

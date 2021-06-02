@@ -37,7 +37,6 @@
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
 
-#include <asm/pgtable.h>
 #include <linux/uaccess.h>
 #include <asm/io.h>
 #include <asm/processor.h>
@@ -51,8 +50,6 @@
 
 extern void ret_from_fork(void);
 extern void ret_from_kernel_thread(void);
-
-struct task_struct *current_set[NR_CPUS] = {&init_task, };
 
 void (*pm_power_off)(void) = NULL;
 EXPORT_SYMBOL(pm_power_off);
@@ -205,7 +202,8 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
  */
 
 int copy_thread(unsigned long clone_flags, unsigned long usp_thread_fn,
-		unsigned long thread_fn_arg, struct task_struct *p)
+		unsigned long thread_fn_arg, struct task_struct *p,
+		unsigned long tls)
 {
 	struct pt_regs *childregs = task_pt_regs(p);
 
@@ -219,7 +217,7 @@ int copy_thread(unsigned long clone_flags, unsigned long usp_thread_fn,
 
 	p->thread.sp = (unsigned long)childregs;
 
-	if (!(p->flags & PF_KTHREAD)) {
+	if (!(p->flags & (PF_KTHREAD | PF_IO_WORKER))) {
 		struct pt_regs *regs = current_pt_regs();
 		unsigned long usp = usp_thread_fn ?
 			usp_thread_fn : regs->areg[1];
@@ -266,9 +264,10 @@ int copy_thread(unsigned long clone_flags, unsigned long usp_thread_fn,
 			       &regs->areg[XCHAL_NUM_AREGS - len/4], len);
 		}
 
-		/* The thread pointer is passed in the '4th argument' (= a5) */
+		childregs->syscall = regs->syscall;
+
 		if (clone_flags & CLONE_SETTLS)
-			childregs->threadptr = childregs->areg[5];
+			childregs->threadptr = tls;
 	} else {
 		p->thread.ra = MAKE_RA_FOR_CALL(
 				(unsigned long)ret_from_kernel_thread, 1);
@@ -321,8 +320,8 @@ unsigned long get_wchan(struct task_struct *p)
 
 		/* Stack layout: sp-4: ra, sp-3: sp' */
 
-		pc = MAKE_PC_FROM_RA(*(unsigned long*)sp - 4, sp);
-		sp = *(unsigned long *)sp - 3;
+		pc = MAKE_PC_FROM_RA(SPILL_SLOT(sp, 0), sp);
+		sp = SPILL_SLOT(sp, 1);
 	} while (count++ < 16);
 	return 0;
 }

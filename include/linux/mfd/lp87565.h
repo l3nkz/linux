@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Functions to access LP87565 power management chip.
  *
- * Copyright (C) 2017 Texas Instruments Incorporated - http://www.ti.com/
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation version 2.
+ * Copyright (C) 2017 Texas Instruments Incorporated - https://www.ti.com/
  */
 
 #ifndef __LINUX_MFD_LP87565_H
@@ -17,6 +14,8 @@
 
 enum lp87565_device_type {
 	LP87565_DEVICE_TYPE_UNKNOWN	= 0,
+	LP87565_DEVICE_TYPE_LP87524_Q1,
+	LP87565_DEVICE_TYPE_LP87561_Q1,
 	LP87565_DEVICE_TYPE_LP87565_Q1,
 };
 
@@ -238,9 +237,6 @@ enum lp87565_device_type {
 #define LP87565_GOIO2_OUT			BIT(1)
 #define LP87565_GOIO1_OUT			BIT(0)
 
-/* Number of step-down converters available */
-#define LP87565_NUM_BUCK		6
-
 enum LP87565_regulator_id {
 	/* BUCK's */
 	LP87565_BUCK_0,
@@ -249,6 +245,7 @@ enum LP87565_regulator_id {
 	LP87565_BUCK_3,
 	LP87565_BUCK_10,
 	LP87565_BUCK_23,
+	LP87565_BUCK_3210,
 };
 
 /**

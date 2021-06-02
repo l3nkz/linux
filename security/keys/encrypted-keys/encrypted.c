@@ -1,15 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 IBM Corporation
  * Copyright (C) 2010 Politecnico di Torino, Italy
- *                    TORSEC group -- http://security.polito.it
+ *                    TORSEC group -- https://security.polito.it
  *
  * Authors:
  * Mimi Zohar <zohar@us.ibm.com>
  * Roberto Sassu <roberto.sassu@polito.it>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, version 2 of the License.
  *
  * See Documentation/security/keys/trusted-encrypted.rst
  */
@@ -32,7 +29,7 @@
 #include <crypto/aes.h>
 #include <crypto/algapi.h>
 #include <crypto/hash.h>
-#include <crypto/sha.h>
+#include <crypto/sha2.h>
 #include <crypto/skcipher.h>
 
 #include "encrypted.h"
@@ -60,11 +57,11 @@ static int blksize;
 static struct crypto_shash *hash_tfm;
 
 enum {
-	Opt_err = -1, Opt_new, Opt_load, Opt_update
+	Opt_new, Opt_load, Opt_update, Opt_err
 };
 
 enum {
-	Opt_error = -1, Opt_default, Opt_ecryptfs, Opt_enc32
+	Opt_default, Opt_ecryptfs, Opt_enc32, Opt_error
 };
 
 static const match_table_t key_format_tokens = {
@@ -326,20 +323,6 @@ error:
 	return ukey;
 }
 
-static int calc_hash(struct crypto_shash *tfm, u8 *digest,
-		     const u8 *buf, unsigned int buflen)
-{
-	SHASH_DESC_ON_STACK(desc, tfm);
-	int err;
-
-	desc->tfm = tfm;
-	desc->flags = 0;
-
-	err = crypto_shash_digest(desc, buf, buflen, digest);
-	shash_desc_zero(desc);
-	return err;
-}
-
 static int calc_hmac(u8 *digest, const u8 *key, unsigned int keylen,
 		     const u8 *buf, unsigned int buflen)
 {
@@ -355,7 +338,7 @@ static int calc_hmac(u8 *digest, const u8 *key, unsigned int keylen,
 
 	err = crypto_shash_setkey(tfm, key, keylen);
 	if (!err)
-		err = calc_hash(tfm, digest, buf, buflen);
+		err = crypto_shash_tfm_digest(tfm, buf, buflen, digest);
 	crypto_free_shash(tfm);
 	return err;
 }
@@ -385,8 +368,9 @@ static int get_derived_key(u8 *derived_key, enum derived_key_type key_type,
 
 	memcpy(derived_buf + strlen(derived_buf) + 1, master_key,
 	       master_keylen);
-	ret = calc_hash(hash_tfm, derived_key, derived_buf, derived_buf_len);
-	kzfree(derived_buf);
+	ret = crypto_shash_tfm_digest(hash_tfm, derived_buf, derived_buf_len,
+				      derived_key);
+	kfree_sensitive(derived_buf);
 	return ret;
 }
 
@@ -828,13 +812,13 @@ static int encrypted_instantiate(struct key *key,
 	ret = encrypted_init(epayload, key->description, format, master_desc,
 			     decrypted_datalen, hex_encoded_iv);
 	if (ret < 0) {
-		kzfree(epayload);
+		kfree_sensitive(epayload);
 		goto out;
 	}
 
 	rcu_assign_keypointer(key, epayload);
 out:
-	kzfree(datablob);
+	kfree_sensitive(datablob);
 	return ret;
 }
 
@@ -843,7 +827,7 @@ static void encrypted_rcu_free(struct rcu_head *rcu)
 	struct encrypted_key_payload *epayload;
 
 	epayload = container_of(rcu, struct encrypted_key_payload, rcu);
-	kzfree(epayload);
+	kfree_sensitive(epayload);
 }
 
 /*
@@ -901,19 +885,19 @@ static int encrypted_update(struct key *key, struct key_preparsed_payload *prep)
 	rcu_assign_keypointer(key, new_epayload);
 	call_rcu(&epayload->rcu, encrypted_rcu_free);
 out:
-	kzfree(buf);
+	kfree_sensitive(buf);
 	return ret;
 }
 
 /*
- * encrypted_read - format and copy the encrypted data to userspace
+ * encrypted_read - format and copy out the encrypted data
  *
  * The resulting datablob format is:
  * <master-key name> <decrypted data length> <encrypted iv> <encrypted data>
  *
  * On success, return to userspace the encrypted key datablob size.
  */
-static long encrypted_read(const struct key *key, char __user *buffer,
+static long encrypted_read(const struct key *key, char *buffer,
 			   size_t buflen)
 {
 	struct encrypted_key_payload *epayload;
@@ -961,9 +945,8 @@ static long encrypted_read(const struct key *key, char __user *buffer,
 	key_put(mkey);
 	memzero_explicit(derived_key, sizeof(derived_key));
 
-	if (copy_to_user(buffer, ascii_buf, asciiblob_len) != 0)
-		ret = -EFAULT;
-	kzfree(ascii_buf);
+	memcpy(buffer, ascii_buf, asciiblob_len);
+	kfree_sensitive(ascii_buf);
 
 	return asciiblob_len;
 out:
@@ -978,7 +961,7 @@ out:
  */
 static void encrypted_destroy(struct key *key)
 {
-	kzfree(key->payload.data[0]);
+	kfree_sensitive(key->payload.data[0]);
 }
 
 struct key_type key_type_encrypted = {

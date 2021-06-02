@@ -198,6 +198,20 @@ static enum dscl_mode_sel dpp1_dscl_get_dscl_mode(
 	return DSCL_MODE_SCALING_420_YCBCR_ENABLE;
 }
 
+static void dpp1_power_on_dscl(
+	struct dpp *dpp_base,
+	bool power_on)
+{
+	struct dcn10_dpp *dpp = TO_DCN10_DPP(dpp_base);
+
+	if (dpp->tf_regs->DSCL_MEM_PWR_CTRL) {
+		REG_UPDATE(DSCL_MEM_PWR_CTRL, LUT_MEM_PWR_FORCE, power_on ? 0 : 3);
+		if (power_on)
+			REG_WAIT(DSCL_MEM_PWR_STATUS, LUT_MEM_PWR_STATE, 0, 1, 5);
+	}
+}
+
+
 static void dpp1_dscl_set_lb(
 	struct dcn10_dpp *dpp,
 	const struct line_buffer_params *lb_params,
@@ -215,6 +229,12 @@ static void dpp1_dscl_set_lb(
 			PIXEL_REDUCE_MODE, 1, /* Pixel reduction mode: Rounding */
 			DYNAMIC_PIXEL_DEPTH, dyn_pix_depth, /* Dynamic expansion pixel depth */
 			DITHER_EN, 0, /* Dithering enable: Disabled */
+			INTERLEAVE_EN, lb_params->interleave_en, /* Interleave source enable */
+			LB_DATA_FORMAT__ALPHA_EN, lb_params->alpha_en); /* Alpha enable */
+	}
+	else {
+		/* DSCL caps: pixel data processed in float format */
+		REG_SET_2(LB_DATA_FORMAT, 0,
 			INTERLEAVE_EN, lb_params->interleave_en, /* Interleave source enable */
 			LB_DATA_FORMAT__ALPHA_EN, lb_params->alpha_en); /* Alpha enable */
 	}
@@ -406,15 +426,25 @@ void dpp1_dscl_calc_lb_num_partitions(
 		int *num_part_y,
 		int *num_part_c)
 {
+	int lb_memory_size, lb_memory_size_c, lb_memory_size_a, num_partitions_a,
+	lb_bpc, memory_line_size_y, memory_line_size_c, memory_line_size_a;
+
 	int line_size = scl_data->viewport.width < scl_data->recout.width ?
 			scl_data->viewport.width : scl_data->recout.width;
 	int line_size_c = scl_data->viewport_c.width < scl_data->recout.width ?
 			scl_data->viewport_c.width : scl_data->recout.width;
-	int lb_bpc = dpp1_dscl_get_lb_depth_bpc(scl_data->lb_params.depth);
-	int memory_line_size_y = (line_size * lb_bpc + 71) / 72; /* +71 to ceil */
-	int memory_line_size_c = (line_size_c * lb_bpc + 71) / 72; /* +71 to ceil */
-	int memory_line_size_a = (line_size + 5) / 6; /* +5 to ceil */
-	int lb_memory_size, lb_memory_size_c, lb_memory_size_a, num_partitions_a;
+
+	if (line_size == 0)
+		line_size = 1;
+
+	if (line_size_c == 0)
+		line_size_c = 1;
+
+
+	lb_bpc = dpp1_dscl_get_lb_depth_bpc(scl_data->lb_params.depth);
+	memory_line_size_y = (line_size * lb_bpc + 71) / 72; /* +71 to ceil */
+	memory_line_size_c = (line_size_c * lb_bpc + 71) / 72; /* +71 to ceil */
+	memory_line_size_a = (line_size + 5) / 6; /* +5 to ceil */
 
 	if (lb_config == LB_MEMORY_CONFIG_1) {
 		lb_memory_size = 816;
@@ -597,11 +627,13 @@ static void dpp1_dscl_set_manual_ratio_init(
 		SCL_V_INIT_FRAC, init_frac,
 		SCL_V_INIT_INT, init_int);
 
-	init_frac = dc_fixpt_u0d19(data->inits.v_bot) << 5;
-	init_int = dc_fixpt_floor(data->inits.v_bot);
-	REG_SET_2(SCL_VERT_FILTER_INIT_BOT, 0,
-		SCL_V_INIT_FRAC_BOT, init_frac,
-		SCL_V_INIT_INT_BOT, init_int);
+	if (REG(SCL_VERT_FILTER_INIT_BOT)) {
+		init_frac = dc_fixpt_u0d19(data->inits.v_bot) << 5;
+		init_int = dc_fixpt_floor(data->inits.v_bot);
+		REG_SET_2(SCL_VERT_FILTER_INIT_BOT, 0,
+			SCL_V_INIT_FRAC_BOT, init_frac,
+			SCL_V_INIT_INT_BOT, init_int);
+	}
 
 	init_frac = dc_fixpt_u0d19(data->inits.v_c) << 5;
 	init_int = dc_fixpt_floor(data->inits.v_c);
@@ -609,11 +641,13 @@ static void dpp1_dscl_set_manual_ratio_init(
 		SCL_V_INIT_FRAC_C, init_frac,
 		SCL_V_INIT_INT_C, init_int);
 
-	init_frac = dc_fixpt_u0d19(data->inits.v_c_bot) << 5;
-	init_int = dc_fixpt_floor(data->inits.v_c_bot);
-	REG_SET_2(SCL_VERT_FILTER_INIT_BOT_C, 0,
-		SCL_V_INIT_FRAC_BOT_C, init_frac,
-		SCL_V_INIT_INT_BOT_C, init_int);
+	if (REG(SCL_VERT_FILTER_INIT_BOT_C)) {
+		init_frac = dc_fixpt_u0d19(data->inits.v_c_bot) << 5;
+		init_int = dc_fixpt_floor(data->inits.v_c_bot);
+		REG_SET_2(SCL_VERT_FILTER_INIT_BOT_C, 0,
+			SCL_V_INIT_FRAC_BOT_C, init_frac,
+			SCL_V_INIT_INT_BOT_C, init_int);
+	}
 }
 
 
@@ -636,7 +670,7 @@ static void dpp1_dscl_set_recout(
 			 RECOUT_WIDTH, recout->width,
 		/* Number of RECOUT vertical lines */
 			 RECOUT_HEIGHT, recout->height
-			 - visual_confirm_on * 4 * (dpp->base.inst + 1));
+			 - visual_confirm_on * 2 * (dpp->base.inst + 1));
 }
 
 /* Main function to program scaler and line buffer in manual scaling mode */
@@ -658,6 +692,11 @@ void dpp1_dscl_set_scaler_manual_scale(
 
 	dpp->scl_data = *scl_data;
 
+	if (dpp_base->ctx->dc->debug.enable_mem_low_power.bits.dscl) {
+		if (dscl_mode != DSCL_MODE_DSCL_BYPASS)
+			dpp1_power_on_dscl(dpp_base, true);
+	}
+
 	/* Autocal off */
 	REG_SET_3(DSCL_AUTOCAL, 0,
 		AUTOCAL_MODE, AUTOCAL_MODE_OFF,
@@ -677,8 +716,11 @@ void dpp1_dscl_set_scaler_manual_scale(
 	/* SCL mode */
 	REG_UPDATE(SCL_MODE, DSCL_MODE, dscl_mode);
 
-	if (dscl_mode == DSCL_MODE_DSCL_BYPASS)
+	if (dscl_mode == DSCL_MODE_DSCL_BYPASS) {
+		if (dpp_base->ctx->dc->debug.enable_mem_low_power.bits.dscl)
+			dpp1_power_on_dscl(dpp_base, false);
 		return;
+	}
 
 	/* LB */
 	lb_config =  dpp1_dscl_find_lb_memory_config(dpp, scl_data);
@@ -688,15 +730,17 @@ void dpp1_dscl_set_scaler_manual_scale(
 		return;
 
 	/* Black offsets */
-	if (ycbcr)
-		REG_SET_2(SCL_BLACK_OFFSET, 0,
-				SCL_BLACK_OFFSET_RGB_Y, BLACK_OFFSET_RGB_Y,
-				SCL_BLACK_OFFSET_CBCR, BLACK_OFFSET_CBCR);
-	else
+	if (REG(SCL_BLACK_OFFSET)) {
+		if (ycbcr)
+			REG_SET_2(SCL_BLACK_OFFSET, 0,
+					SCL_BLACK_OFFSET_RGB_Y, BLACK_OFFSET_RGB_Y,
+					SCL_BLACK_OFFSET_CBCR, BLACK_OFFSET_CBCR);
+		else
 
-		REG_SET_2(SCL_BLACK_OFFSET, 0,
-				SCL_BLACK_OFFSET_RGB_Y, BLACK_OFFSET_RGB_Y,
-				SCL_BLACK_OFFSET_CBCR, BLACK_OFFSET_RGB_Y);
+			REG_SET_2(SCL_BLACK_OFFSET, 0,
+					SCL_BLACK_OFFSET_RGB_Y, BLACK_OFFSET_RGB_Y,
+					SCL_BLACK_OFFSET_CBCR, BLACK_OFFSET_RGB_Y);
+	}
 
 	/* Manually calculate scale ratio and init values */
 	dpp1_dscl_set_manual_ratio_init(dpp, scl_data);

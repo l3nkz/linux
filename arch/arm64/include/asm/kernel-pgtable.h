@@ -1,25 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Kernel page table mapping
  *
  * Copyright (C) 2015 ARM Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_KERNEL_PGTABLE_H
 #define __ASM_KERNEL_PGTABLE_H
 
-#include <asm/pgtable.h>
+#include <asm/pgtable-hwdef.h>
 #include <asm/sparsemem.h>
 
 /*
@@ -97,14 +86,8 @@
 			+ EARLY_PGDS((vstart), (vend)) 	/* each PGDIR needs a next level page table */	\
 			+ EARLY_PUDS((vstart), (vend))	/* each PUD needs a next level page table */	\
 			+ EARLY_PMDS((vstart), (vend)))	/* each PMD needs a next level page table */
-#define INIT_DIR_SIZE (PAGE_SIZE * EARLY_PAGES(KIMAGE_VADDR + TEXT_OFFSET, _end))
+#define INIT_DIR_SIZE (PAGE_SIZE * EARLY_PAGES(KIMAGE_VADDR, _end))
 #define IDMAP_DIR_SIZE		(IDMAP_PGTABLE_LEVELS * PAGE_SIZE)
-
-#ifdef CONFIG_ARM64_SW_TTBR0_PAN
-#define RESERVED_TTBR0_SIZE	(PAGE_SIZE)
-#else
-#define RESERVED_TTBR0_SIZE	(0)
-#endif
 
 /* Initial memory map size */
 #if ARM64_SWAPPER_USES_SECTION_MAPS
@@ -153,7 +136,7 @@
  * has a direct correspondence, and needs to appear sufficiently aligned
  * in the virtual address space.
  */
-#if defined(CONFIG_SPARSEMEM_VMEMMAP) && ARM64_MEMSTART_SHIFT < SECTION_SIZE_BITS
+#if ARM64_MEMSTART_SHIFT < SECTION_SIZE_BITS
 #define ARM64_MEMSTART_ALIGN	(1UL << SECTION_SIZE_BITS)
 #else
 #define ARM64_MEMSTART_ALIGN	(1UL << ARM64_MEMSTART_SHIFT)

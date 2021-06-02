@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * et8ek8_driver.c
  *
@@ -11,15 +12,6 @@
  *
  * This driver is based on the Micron MT9T012 camera imager driver
  * (C) Texas Instruments.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -1245,7 +1237,7 @@ static ssize_t
 et8ek8_priv_mem_read(struct device *dev, struct device_attribute *attr,
 		     char *buf)
 {
-	struct v4l2_subdev *subdev = i2c_get_clientdata(to_i2c_client(dev));
+	struct v4l2_subdev *subdev = dev_get_drvdata(dev);
 	struct et8ek8_sensor *sensor = to_et8ek8_sensor(subdev);
 
 #if PAGE_SIZE < ET8EK8_PRIV_MEM_SIZE
@@ -1382,8 +1374,7 @@ static const struct v4l2_subdev_internal_ops et8ek8_internal_ops = {
  */
 static int __maybe_unused et8ek8_suspend(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
-	struct v4l2_subdev *subdev = i2c_get_clientdata(client);
+	struct v4l2_subdev *subdev = dev_get_drvdata(dev);
 	struct et8ek8_sensor *sensor = to_et8ek8_sensor(subdev);
 
 	if (!sensor->power_count)
@@ -1394,8 +1385,7 @@ static int __maybe_unused et8ek8_suspend(struct device *dev)
 
 static int __maybe_unused et8ek8_resume(struct device *dev)
 {
-	struct i2c_client *client = to_i2c_client(dev);
-	struct v4l2_subdev *subdev = i2c_get_clientdata(client);
+	struct v4l2_subdev *subdev = dev_get_drvdata(dev);
 	struct et8ek8_sensor *sensor = to_et8ek8_sensor(subdev);
 
 	if (!sensor->power_count)
@@ -1404,8 +1394,7 @@ static int __maybe_unused et8ek8_resume(struct device *dev)
 	return __et8ek8_set_power(sensor, true);
 }
 
-static int et8ek8_probe(struct i2c_client *client,
-			const struct i2c_device_id *devid)
+static int et8ek8_probe(struct i2c_client *client)
 {
 	struct et8ek8_sensor *sensor;
 	struct device *dev = &client->dev;
@@ -1454,7 +1443,7 @@ static int et8ek8_probe(struct i2c_client *client,
 		goto err_mutex;
 	}
 
-	ret = v4l2_async_register_subdev_sensor_common(&sensor->subdev);
+	ret = v4l2_async_register_subdev_sensor(&sensor->subdev);
 	if (ret < 0)
 		goto err_entity;
 
@@ -1512,7 +1501,7 @@ static struct i2c_driver et8ek8_i2c_driver = {
 		.pm	= &et8ek8_pm_ops,
 		.of_match_table	= et8ek8_of_table,
 	},
-	.probe		= et8ek8_probe,
+	.probe_new	= et8ek8_probe,
 	.remove		= __exit_p(et8ek8_remove),
 	.id_table	= et8ek8_id_table,
 };

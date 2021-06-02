@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* tmp401.c
  *
  * Copyright (C) 2007,2008 Hans de Goede <hdegoede@redhat.com>
@@ -7,20 +8,6 @@
  *
  * Cleanup and support for TMP431 and TMP432 by Guenter Roeck
  * Copyright (c) 2013 Guenter Roeck <linux@roeck-us.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 /*
@@ -696,8 +683,7 @@ static int tmp401_detect(struct i2c_client *client,
 	return 0;
 }
 
-static int tmp401_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int tmp401_probe(struct i2c_client *client)
 {
 	static const char * const names[] = {
 		"TMP401", "TMP411", "TMP431", "TMP432", "TMP435", "TMP461"
@@ -713,7 +699,7 @@ static int tmp401_probe(struct i2c_client *client,
 
 	data->client = client;
 	mutex_init(&data->update_lock);
-	data->kind = id->driver_data;
+	data->kind = i2c_match_id(tmp401_id, client)->driver_data;
 
 	/* Initialize the TMP401 chip */
 	status = tmp401_init_client(data, client);
@@ -749,7 +735,7 @@ static struct i2c_driver tmp401_driver = {
 	.driver = {
 		.name	= "tmp401",
 	},
-	.probe		= tmp401_probe,
+	.probe_new	= tmp401_probe,
 	.id_table	= tmp401_id,
 	.detect		= tmp401_detect,
 	.address_list	= normal_i2c,

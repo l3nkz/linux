@@ -270,6 +270,8 @@ struct ib_uverbs_ex_query_device_resp {
 	struct ib_uverbs_tm_caps tm_caps;
 	struct ib_uverbs_cq_moderation_caps cq_moderation_caps;
 	__aligned_u64 max_dm_size;
+	__u32 xrc_odp_caps;
+	__u32 reserved;
 };
 
 struct ib_uverbs_query_port {
@@ -455,6 +457,17 @@ struct ib_uverbs_poll_cq {
 	__u32 ne;
 };
 
+enum ib_uverbs_wc_opcode {
+	IB_UVERBS_WC_SEND = 0,
+	IB_UVERBS_WC_RDMA_WRITE = 1,
+	IB_UVERBS_WC_RDMA_READ = 2,
+	IB_UVERBS_WC_COMP_SWAP = 3,
+	IB_UVERBS_WC_FETCH_ADD = 4,
+	IB_UVERBS_WC_BIND_MW = 5,
+	IB_UVERBS_WC_LOCAL_INV = 6,
+	IB_UVERBS_WC_TSO = 7,
+};
+
 struct ib_uverbs_wc {
 	__aligned_u64 wr_id;
 	__u32 status;
@@ -581,20 +594,6 @@ enum ib_uverbs_create_qp_mask {
 
 enum {
 	IB_UVERBS_CREATE_QP_SUP_COMP_MASK = IB_UVERBS_CREATE_QP_MASK_IND_TABLE,
-};
-
-enum {
-	/*
-	 * This value is equal to IB_QP_DEST_QPN.
-	 */
-	IB_USER_LEGACY_LAST_QP_ATTR_MASK = 1ULL << 20,
-};
-
-enum {
-	/*
-	 * This value is equal to IB_QP_RATE_LIMIT.
-	 */
-	IB_USER_LAST_QP_ATTR_MASK = 1ULL << 25,
 };
 
 struct ib_uverbs_ex_create_qp {

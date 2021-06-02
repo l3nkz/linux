@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/proc_fs.h>
+#include <linux/ethtool.h>
 #include <linux/export.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
@@ -104,6 +105,8 @@ static void bond_info_show_master(struct seq_file *seq)
 		   bond->params.updelay * bond->params.miimon);
 	seq_printf(seq, "Down Delay (ms): %d\n",
 		   bond->params.downdelay * bond->params.miimon);
+	seq_printf(seq, "Peer Notification Delay (ms): %d\n",
+		   bond->params.peer_notif_delay * bond->params.miimon);
 
 
 	/* ARP information */

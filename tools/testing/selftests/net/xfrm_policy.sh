@@ -106,6 +106,13 @@ do_overlap()
     #
     # 10.0.0.0/24 and 10.0.1.0/24 nodes have been merged as 10.0.0.0/23.
     ip -net $ns xfrm policy add src 10.1.0.0/24 dst 10.0.0.0/23 dir fwd priority 200 action block
+
+    # similar to above: add policies (with partially random address), with shrinking prefixes.
+    for p in 29 28 27;do
+      for k in $(seq 1 32); do
+       ip -net $ns xfrm policy add src 10.253.1.$((RANDOM%255))/$p dst 10.254.1.$((RANDOM%255))/$p dir fwd priority $((200+k)) action block 2>/dev/null
+      done
+    done
 }
 
 do_esp_policy_get_check() {
@@ -195,7 +202,7 @@ check_xfrm() {
 	# 1: iptables -m policy rule count != 0
 	rval=$1
 	ip=$2
-	lret=0
+	local lret=0
 
 	ip netns exec ns1 ping -q -c 1 10.0.2.$ip > /dev/null
 
@@ -255,6 +262,70 @@ check_exceptions()
 	fi
 
 	return $lret
+}
+
+check_hthresh_repeat()
+{
+	local log=$1
+	i=0
+
+	for i in $(seq 1 10);do
+		ip -net ns1 xfrm policy update src e000:0001::0000 dst ff01::0014:0000:0001 dir in tmpl src :: dst :: proto esp mode tunnel priority 100 action allow || break
+		ip -net ns1 xfrm policy set hthresh6 0 28 || break
+
+		ip -net ns1 xfrm policy update src e000:0001::0000 dst ff01::01 dir in tmpl src :: dst :: proto esp mode tunnel priority 100 action allow || break
+		ip -net ns1 xfrm policy set hthresh6 0 28 || break
+	done
+
+	if [ $i -ne 10 ] ;then
+		echo "FAIL: $log" 1>&2
+		ret=1
+		return 1
+	fi
+
+	echo "PASS: $log"
+	return 0
+}
+
+# insert non-overlapping policies in a random order and check that
+# all of them can be fetched using the traffic selectors.
+check_random_order()
+{
+	local ns=$1
+	local log=$2
+
+	for i in $(seq 100); do
+		ip -net $ns xfrm policy flush
+		for j in $(seq 0 16 255 | sort -R); do
+			ip -net $ns xfrm policy add dst $j.0.0.0/24 dir out priority 10 action allow
+		done
+		for j in $(seq 0 16 255); do
+			if ! ip -net $ns xfrm policy get dst $j.0.0.0/24 dir out > /dev/null; then
+				echo "FAIL: $log" 1>&2
+				return 1
+			fi
+		done
+	done
+
+	for i in $(seq 100); do
+		ip -net $ns xfrm policy flush
+		for j in $(seq 0 16 255 | sort -R); do
+			local addr=$(printf "e000:0000:%02x00::/56" $j)
+			ip -net $ns xfrm policy add dst $addr dir out priority 10 action allow
+		done
+		for j in $(seq 0 16 255); do
+			local addr=$(printf "e000:0000:%02x00::/56" $j)
+			if ! ip -net $ns xfrm policy get dst $addr dir out > /dev/null; then
+				echo "FAIL: $log" 1>&2
+				return 1
+			fi
+		done
+	done
+
+	ip -net $ns xfrm policy flush
+
+	echo "PASS: $log"
+	return 0
 }
 
 #check for needed privileges
@@ -404,7 +475,11 @@ for n in ns3 ns4;do
 	ip -net $n xfrm policy set hthresh4 32 32 hthresh6 128 128
 	sleep $((RANDOM%5))
 done
-check_exceptions "exceptions and block policies after hresh change to normal"
+check_exceptions "exceptions and block policies after htresh change to normal"
+
+check_hthresh_repeat "policies with repeated htresh change"
+
+check_random_order ns3 "policies inserted in random order"
 
 for i in 1 2 3 4;do ip netns del ns$i;done
 

@@ -1,22 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 3-axis accelerometer driver supporting following Bosch-Sensortec chips:
  *  - BMC150
  *  - BMI055
  *  - BMA255
  *  - BMA250E
+ *  - BMA222
  *  - BMA222E
  *  - BMA280
  *
  * Copyright (c) 2014, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/module.h>
@@ -35,6 +28,7 @@
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/triggered_buffer.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 
 #include "bmc150-accel.h"
 
@@ -125,7 +119,7 @@
 #define BMC150_ACCEL_SLEEP_1_SEC		0x0F
 
 #define BMC150_ACCEL_REG_TEMP			0x08
-#define BMC150_ACCEL_TEMP_CENTER_VAL		24
+#define BMC150_ACCEL_TEMP_CENTER_VAL		23
 
 #define BMC150_ACCEL_AXIS_TO_REG(axis)	(BMC150_ACCEL_REG_XOUT_L + (axis * 2))
 #define BMC150_AUTO_SUSPEND_DELAY_MS		2000
@@ -191,12 +185,20 @@ enum bmc150_accel_trigger_id {
 
 struct bmc150_accel_data {
 	struct regmap *regmap;
-	int irq;
+	struct regulator_bulk_data regulators[2];
 	struct bmc150_accel_interrupt interrupts[BMC150_ACCEL_INTERRUPTS];
 	struct bmc150_accel_trigger triggers[BMC150_ACCEL_TRIGGERS];
 	struct mutex mutex;
 	u8 fifo_mode, watermark;
 	s16 buffer[8];
+	/*
+	 * Ensure there is sufficient space and correct alignment for
+	 * the timestamp if enabled
+	 */
+	struct {
+		__le16 channels[3];
+		s64 ts __aligned(8);
+	} scan;
 	u8 bw_bits;
 	u32 slope_dur;
 	u32 slope_thres;
@@ -204,6 +206,8 @@ struct bmc150_accel_data {
 	int ev_enable_state;
 	int64_t timestamp, old_timestamp; /* Only used in hw fifo mode. */
 	const struct bmc150_accel_chip_info *chip_info;
+	struct i2c_client *second_device;
+	struct iio_mount_matrix orientation;
 };
 
 static const struct {
@@ -393,7 +397,7 @@ static int bmc150_accel_set_power_state(struct bmc150_accel_data *data, bool on)
 
 	if (ret < 0) {
 		dev_err(dev,
-			"Failed: bmc150_accel_set_power_state for %d\n", on);
+			"Failed: %s for %d\n", __func__, on);
 		if (on)
 			pm_runtime_put_noidle(dev);
 
@@ -406,6 +410,109 @@ static int bmc150_accel_set_power_state(struct bmc150_accel_data *data, bool on)
 static int bmc150_accel_set_power_state(struct bmc150_accel_data *data, bool on)
 {
 	return 0;
+}
+#endif
+
+#ifdef CONFIG_ACPI
+/*
+ * Support for getting accelerometer information from BOSC0200 ACPI nodes.
+ *
+ * There are 2 variants of the BOSC0200 ACPI node. Some 2-in-1s with 360 degree
+ * hinges declare 2 I2C ACPI-resources for 2 accelerometers, 1 in the display
+ * and 1 in the base of the 2-in-1. On these 2-in-1s the ROMS ACPI object
+ * contains the mount-matrix for the sensor in the display and ROMK contains
+ * the mount-matrix for the sensor in the base. On devices using a single
+ * sensor there is a ROTM ACPI object which contains the mount-matrix.
+ *
+ * Here is an incomplete list of devices known to use 1 of these setups:
+ *
+ * Yoga devices with 2 accelerometers using ROMS + ROMK for the mount-matrices:
+ * Lenovo Thinkpad Yoga 11e 3th gen
+ * Lenovo Thinkpad Yoga 11e 4th gen
+ *
+ * Tablets using a single accelerometer using ROTM for the mount-matrix:
+ * Chuwi Hi8 Pro (CWI513)
+ * Chuwi Vi8 Plus (CWI519)
+ * Chuwi Hi13
+ * Irbis TW90
+ * Jumper EZpad mini 3
+ * Onda V80 plus
+ * Predia Basic Tablet
+ */
+static bool bmc150_apply_acpi_orientation(struct device *dev,
+					  struct iio_mount_matrix *orientation)
+{
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
+	struct acpi_device *adev = ACPI_COMPANION(dev);
+	char *name, *alt_name, *label, *str;
+	union acpi_object *obj, *elements;
+	acpi_status status;
+	int i, j, val[3];
+
+	if (!adev || !acpi_dev_hid_uid_match(adev, "BOSC0200", NULL))
+		return false;
+
+	if (strcmp(dev_name(dev), "i2c-BOSC0200:base") == 0) {
+		alt_name = "ROMK";
+		label = "accel-base";
+	} else {
+		alt_name = "ROMS";
+		label = "accel-display";
+	}
+
+	if (acpi_has_method(adev->handle, "ROTM")) {
+		name = "ROTM";
+	} else if (acpi_has_method(adev->handle, alt_name)) {
+		name = alt_name;
+		indio_dev->label = label;
+	} else {
+		return false;
+	}
+
+	status = acpi_evaluate_object(adev->handle, name, NULL, &buffer);
+	if (ACPI_FAILURE(status)) {
+		dev_warn(dev, "Failed to get ACPI mount matrix: %d\n", status);
+		return false;
+	}
+
+	obj = buffer.pointer;
+	if (obj->type != ACPI_TYPE_PACKAGE || obj->package.count != 3)
+		goto unknown_format;
+
+	elements = obj->package.elements;
+	for (i = 0; i < 3; i++) {
+		if (elements[i].type != ACPI_TYPE_STRING)
+			goto unknown_format;
+
+		str = elements[i].string.pointer;
+		if (sscanf(str, "%d %d %d", &val[0], &val[1], &val[2]) != 3)
+			goto unknown_format;
+
+		for (j = 0; j < 3; j++) {
+			switch (val[j]) {
+			case -1: str = "-1"; break;
+			case 0:  str = "0";  break;
+			case 1:  str = "1";  break;
+			default: goto unknown_format;
+			}
+			orientation->rotation[i * 3 + j] = str;
+		}
+	}
+
+	kfree(buffer.pointer);
+	return true;
+
+unknown_format:
+	dev_warn(dev, "Unknown ACPI mount matrix format, ignoring\n");
+	kfree(buffer.pointer);
+	return false;
+}
+#else
+static bool bmc150_apply_acpi_orientation(struct device *dev,
+					  struct iio_mount_matrix *orientation)
+{
+	return false;
 }
 #endif
 
@@ -796,6 +903,20 @@ static ssize_t bmc150_accel_get_fifo_state(struct device *dev,
 	return sprintf(buf, "%d\n", state);
 }
 
+static const struct iio_mount_matrix *
+bmc150_accel_get_mount_matrix(const struct iio_dev *indio_dev,
+				const struct iio_chan_spec *chan)
+{
+	struct bmc150_accel_data *data = iio_priv(indio_dev);
+
+	return &data->orientation;
+}
+
+static const struct iio_chan_spec_ext_info bmc150_accel_ext_info[] = {
+	IIO_MOUNT_MATRIX(IIO_SHARED_BY_DIR, bmc150_accel_get_mount_matrix),
+	{ }
+};
+
 static IIO_CONST_ATTR(hwfifo_watermark_min, "1");
 static IIO_CONST_ATTR(hwfifo_watermark_max,
 		      __stringify(BMC150_ACCEL_FIFO_LENGTH));
@@ -915,15 +1036,16 @@ static int __bmc150_accel_fifo_flush(struct iio_dev *indio_dev,
 	 * now.
 	 */
 	for (i = 0; i < count; i++) {
-		u16 sample[8];
 		int j, bit;
 
 		j = 0;
 		for_each_set_bit(bit, indio_dev->active_scan_mask,
 				 indio_dev->masklength)
-			memcpy(&sample[j++], &buffer[i * 3 + bit], 2);
+			memcpy(&data->scan.channels[j++], &buffer[i * 3 + bit],
+			       sizeof(data->scan.channels[0]));
 
-		iio_push_to_buffers_with_timestamp(indio_dev, sample, tstamp);
+		iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
+						   tstamp);
 
 		tstamp += sample_period;
 	}
@@ -978,6 +1100,7 @@ static const struct iio_event_spec bmc150_accel_event = {
 		.shift = 16 - (bits),					\
 		.endianness = IIO_LE,					\
 	},								\
+	.ext_info = bmc150_accel_ext_info,				\
 	.event_spec = &bmc150_accel_event,				\
 	.num_event_specs = 1						\
 }
@@ -1045,6 +1168,20 @@ static const struct bmc150_accel_chip_info bmc150_accel_chip_info_tbl[] = {
 				 {76590, BMC150_ACCEL_DEF_RANGE_4G},
 				 {153277, BMC150_ACCEL_DEF_RANGE_8G},
 				 {306457, BMC150_ACCEL_DEF_RANGE_16G} },
+	},
+	[bma222] = {
+		.name = "BMA222",
+		.chip_id = 0x03,
+		.channels = bma222e_accel_channels,
+		.num_channels = ARRAY_SIZE(bma222e_accel_channels),
+		/*
+		 * The datasheet page 17 says:
+		 * 15.6, 31.3, 62.5 and 125 mg per LSB.
+		 */
+		.scale_table = { {156000, BMC150_ACCEL_DEF_RANGE_2G},
+				 {313000, BMC150_ACCEL_DEF_RANGE_4G},
+				 {625000, BMC150_ACCEL_DEF_RANGE_8G},
+				 {1250000, BMC150_ACCEL_DEF_RANGE_16G} },
 	},
 	[bma222e] = {
 		.name = "BMA222E",
@@ -1117,7 +1254,7 @@ err_read:
 	return IRQ_HANDLED;
 }
 
-static int bmc150_accel_trig_try_reen(struct iio_trigger *trig)
+static void bmc150_accel_trig_reen(struct iio_trigger *trig)
 {
 	struct bmc150_accel_trigger *t = iio_trigger_get_drvdata(trig);
 	struct bmc150_accel_data *data = t->data;
@@ -1126,7 +1263,7 @@ static int bmc150_accel_trig_try_reen(struct iio_trigger *trig)
 
 	/* new data interrupts don't need ack */
 	if (t == &t->data->triggers[BMC150_ACCEL_TRIGGER_DATA_READY])
-		return 0;
+		return;
 
 	mutex_lock(&data->mutex);
 	/* clear any latched interrupt */
@@ -1134,12 +1271,8 @@ static int bmc150_accel_trig_try_reen(struct iio_trigger *trig)
 			   BMC150_ACCEL_INT_MODE_LATCH_INT |
 			   BMC150_ACCEL_INT_MODE_LATCH_RESET);
 	mutex_unlock(&data->mutex);
-	if (ret < 0) {
+	if (ret < 0)
 		dev_err(dev, "Error writing reg_int_rst_latch\n");
-		return ret;
-	}
-
-	return 0;
 }
 
 static int bmc150_accel_trigger_set_state(struct iio_trigger *trig,
@@ -1179,7 +1312,7 @@ static int bmc150_accel_trigger_set_state(struct iio_trigger *trig,
 
 static const struct iio_trigger_ops bmc150_accel_trigger_ops = {
 	.set_trigger_state = bmc150_accel_trigger_set_state,
-	.try_reenable = bmc150_accel_trig_try_reen,
+	.reenable = bmc150_accel_trig_reen,
 };
 
 static int bmc150_accel_handle_roc_event(struct iio_dev *indio_dev)
@@ -1345,7 +1478,6 @@ static int bmc150_accel_triggers_setup(struct iio_dev *indio_dev,
 			break;
 		}
 
-		t->indio_trig->dev.parent = dev;
 		t->indio_trig->ops = &bmc150_accel_trigger_ops;
 		t->intr = bmc150_accel_triggers[i].intr;
 		t->data = data;
@@ -1403,7 +1535,7 @@ static int bmc150_accel_buffer_postenable(struct iio_dev *indio_dev)
 	int ret = 0;
 
 	if (indio_dev->currentmode == INDIO_BUFFER_TRIGGERED)
-		return iio_triggered_buffer_postenable(indio_dev);
+		return 0;
 
 	mutex_lock(&data->mutex);
 
@@ -1435,7 +1567,7 @@ static int bmc150_accel_buffer_predisable(struct iio_dev *indio_dev)
 	struct bmc150_accel_data *data = iio_priv(indio_dev);
 
 	if (indio_dev->currentmode == INDIO_BUFFER_TRIGGERED)
-		return iio_triggered_buffer_predisable(indio_dev);
+		return 0;
 
 	mutex_lock(&data->mutex);
 
@@ -1541,6 +1673,7 @@ static int bmc150_accel_chip_init(struct bmc150_accel_data *data)
 int bmc150_accel_core_probe(struct device *dev, struct regmap *regmap, int irq,
 			    const char *name, bool block_supported)
 {
+	const struct attribute **fifo_attrs;
 	struct bmc150_accel_data *data;
 	struct iio_dev *indio_dev;
 	int ret;
@@ -1551,17 +1684,46 @@ int bmc150_accel_core_probe(struct device *dev, struct regmap *regmap, int irq,
 
 	data = iio_priv(indio_dev);
 	dev_set_drvdata(dev, indio_dev);
-	data->irq = irq;
 
 	data->regmap = regmap;
 
+	if (!bmc150_apply_acpi_orientation(dev, &data->orientation)) {
+		ret = iio_read_mount_matrix(dev, "mount-matrix",
+					     &data->orientation);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * VDD   is the analog and digital domain voltage supply
+	 * VDDIO is the digital I/O voltage supply
+	 */
+	data->regulators[0].supply = "vdd";
+	data->regulators[1].supply = "vddio";
+	ret = devm_regulator_bulk_get(dev,
+				      ARRAY_SIZE(data->regulators),
+				      data->regulators);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to get regulators\n");
+
+	ret = regulator_bulk_enable(ARRAY_SIZE(data->regulators),
+				    data->regulators);
+	if (ret) {
+		dev_err(dev, "failed to enable regulators: %d\n", ret);
+		return ret;
+	}
+	/*
+	 * 2ms or 3ms power-on time according to datasheets, let's better
+	 * be safe than sorry and set this delay to 5ms.
+	 */
+	msleep(5);
+
 	ret = bmc150_accel_chip_init(data);
 	if (ret < 0)
-		return ret;
+		goto err_disable_regulators;
 
 	mutex_init(&data->mutex);
 
-	indio_dev->dev.parent = dev;
 	indio_dev->channels = data->chip_info->channels;
 	indio_dev->num_channels = data->chip_info->num_channels;
 	indio_dev->name = name ? name : data->chip_info->name;
@@ -1569,18 +1731,26 @@ int bmc150_accel_core_probe(struct device *dev, struct regmap *regmap, int irq,
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->info = &bmc150_accel_info;
 
-	ret = iio_triggered_buffer_setup(indio_dev,
-					 &iio_pollfunc_store_time,
-					 bmc150_accel_trigger_handler,
-					 &bmc150_accel_buffer_ops);
-	if (ret < 0) {
-		dev_err(dev, "Failed: iio triggered buffer setup\n");
-		return ret;
+	if (block_supported) {
+		indio_dev->modes |= INDIO_BUFFER_SOFTWARE;
+		indio_dev->info = &bmc150_accel_info_fifo;
+		fifo_attrs = bmc150_accel_fifo_attributes;
+	} else {
+		fifo_attrs = NULL;
 	}
 
-	if (data->irq > 0) {
-		ret = devm_request_threaded_irq(
-						dev, data->irq,
+	ret = iio_triggered_buffer_setup_ext(indio_dev,
+					     &iio_pollfunc_store_time,
+					     bmc150_accel_trigger_handler,
+					     &bmc150_accel_buffer_ops,
+					     fifo_attrs);
+	if (ret < 0) {
+		dev_err(dev, "Failed: iio triggered buffer setup\n");
+		goto err_disable_regulators;
+	}
+
+	if (irq > 0) {
+		ret = devm_request_threaded_irq(dev, irq,
 						bmc150_accel_irq_handler,
 						bmc150_accel_irq_thread_handler,
 						IRQF_TRIGGER_RISING,
@@ -1607,13 +1777,6 @@ int bmc150_accel_core_probe(struct device *dev, struct regmap *regmap, int irq,
 		ret = bmc150_accel_triggers_setup(indio_dev, data);
 		if (ret)
 			goto err_buffer_cleanup;
-
-		if (block_supported) {
-			indio_dev->modes |= INDIO_BUFFER_SOFTWARE;
-			indio_dev->info = &bmc150_accel_info_fifo;
-			iio_buffer_set_attrs(indio_dev->buffer,
-					     bmc150_accel_fifo_attributes);
-		}
 	}
 
 	ret = pm_runtime_set_active(dev);
@@ -1636,10 +1799,33 @@ err_trigger_unregister:
 	bmc150_accel_unregister_triggers(data, BMC150_ACCEL_TRIGGERS - 1);
 err_buffer_cleanup:
 	iio_triggered_buffer_cleanup(indio_dev);
+err_disable_regulators:
+	regulator_bulk_disable(ARRAY_SIZE(data->regulators),
+			       data->regulators);
 
 	return ret;
 }
 EXPORT_SYMBOL_GPL(bmc150_accel_core_probe);
+
+struct i2c_client *bmc150_get_second_device(struct i2c_client *client)
+{
+	struct bmc150_accel_data *data = i2c_get_clientdata(client);
+
+	if (!data)
+		return NULL;
+
+	return data->second_device;
+}
+EXPORT_SYMBOL_GPL(bmc150_get_second_device);
+
+void bmc150_set_second_device(struct i2c_client *client)
+{
+	struct bmc150_accel_data *data = i2c_get_clientdata(client);
+
+	if (data)
+		data->second_device = client;
+}
+EXPORT_SYMBOL_GPL(bmc150_set_second_device);
 
 int bmc150_accel_core_remove(struct device *dev)
 {
@@ -1659,6 +1845,9 @@ int bmc150_accel_core_remove(struct device *dev)
 	mutex_lock(&data->mutex);
 	bmc150_accel_set_mode(data, BMC150_ACCEL_SLEEP_MODE_DEEP_SUSPEND, 0);
 	mutex_unlock(&data->mutex);
+
+	regulator_bulk_disable(ARRAY_SIZE(data->regulators),
+			       data->regulators);
 
 	return 0;
 }

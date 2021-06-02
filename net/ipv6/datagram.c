@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	common UDP/RAW code
  *	Linux INET6 implementation
  *
  *	Authors:
  *	Pedro Roque		<roque@di.fc.ul.pt>
- *
- *	This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/capability.h>
@@ -23,6 +19,7 @@
 #include <linux/route.h>
 #include <linux/slab.h>
 #include <linux/export.h>
+#include <linux/icmp.h>
 
 #include <net/ipv6.h>
 #include <net/ndisc.h>
@@ -31,6 +28,7 @@
 #include <net/ip6_route.h>
 #include <net/tcp_states.h>
 #include <net/dsfield.h>
+#include <net/sock_reuseport.h>
 
 #include <linux/errqueue.h>
 #include <linux/uaccess.h>
@@ -62,7 +60,7 @@ static void ip6_datagram_flow_key_init(struct flowi6 *fl6, struct sock *sk)
 	if (!fl6->flowi6_oif && ipv6_addr_is_multicast(&fl6->daddr))
 		fl6->flowi6_oif = np->mcast_oif;
 
-	security_sk_classify_flow(sk, flowi6_to_flowi(fl6));
+	security_sk_classify_flow(sk, flowi6_to_flowi_common(fl6));
 }
 
 int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
@@ -78,7 +76,7 @@ int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
 
 	if (np->sndflow && (np->flow_label & IPV6_FLOWLABEL_MASK)) {
 		flowlabel = fl6_sock_lookup(sk, np->flow_label);
-		if (!flowlabel)
+		if (IS_ERR(flowlabel))
 			return -EINVAL;
 	}
 	ip6_datagram_flow_key_init(&fl6, sk);
@@ -88,7 +86,7 @@ int ip6_datagram_dst_update(struct sock *sk, bool fix_sk_saddr)
 	final_p = fl6_update_dst(&fl6, opt, &final);
 	rcu_read_unlock();
 
-	dst = ip6_dst_lookup_flow(sk, &fl6, final_p);
+	dst = ip6_dst_lookup_flow(sock_net(sk), sk, &fl6, final_p);
 	if (IS_ERR(dst)) {
 		err = PTR_ERR(dst);
 		goto out;
@@ -258,6 +256,7 @@ ipv4_connected:
 		goto out;
 	}
 
+	reuseport_has_conns(sk, true);
 	sk->sk_state = TCP_ESTABLISHED;
 	sk_set_txhash(sk);
 out:
@@ -285,6 +284,17 @@ int ip6_datagram_connect_v6_only(struct sock *sk, struct sockaddr *uaddr,
 	return ip6_datagram_connect(sk, uaddr, addr_len);
 }
 EXPORT_SYMBOL_GPL(ip6_datagram_connect_v6_only);
+
+static void ipv6_icmp_error_rfc4884(const struct sk_buff *skb,
+				    struct sock_ee_data_rfc4884 *out)
+{
+	switch (icmp6_hdr(skb)->icmp6_type) {
+	case ICMPV6_TIME_EXCEED:
+	case ICMPV6_DEST_UNREACH:
+		ip_icmp_error_rfc4884(skb, out, sizeof(struct icmp6hdr),
+				      icmp6_hdr(skb)->icmp6_datagram_len * 8);
+	}
+}
 
 void ipv6_icmp_error(struct sock *sk, struct sk_buff *skb, int err,
 		     __be16 port, u32 info, u8 *payload)
@@ -315,6 +325,10 @@ void ipv6_icmp_error(struct sock *sk, struct sk_buff *skb, int err,
 	serr->port = port;
 
 	__skb_pull(skb, payload - skb->data);
+
+	if (inet6_sk(sk)->recverr_rfc4884)
+		ipv6_icmp_error_rfc4884(skb, &serr->ee.ee_rfc4884);
+
 	skb_reset_transport_header(skb);
 
 	if (sock_queue_err_skb(sk, skb))
@@ -1034,7 +1048,7 @@ void __ip6_dgram_sock_seq_show(struct seq_file *seq, struct sock *sp,
 	src   = &sp->sk_v6_rcv_saddr;
 	seq_printf(seq,
 		   "%5d: %08X%08X%08X%08X:%04X %08X%08X%08X%08X:%04X "
-		   "%02X %08X:%08X %02X:%08lX %08X %5u %8d %lu %d %pK %d\n",
+		   "%02X %08X:%08X %02X:%08lX %08X %5u %8d %lu %d %pK %u\n",
 		   bucket,
 		   src->s6_addr32[0], src->s6_addr32[1],
 		   src->s6_addr32[2], src->s6_addr32[3], srcp,

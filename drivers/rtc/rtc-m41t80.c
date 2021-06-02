@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * I2C client/driver for the ST M41T80 family of i2c rtc chips.
  *
@@ -6,11 +7,6 @@
  * Based on m41t00.c by Mark A. Greer <mgreer@mvista.com>
  *
  * 2006 (c) mycable GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -89,7 +85,7 @@ static const struct i2c_device_id m41t80_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, m41t80_id);
 
-static const struct of_device_id m41t80_of_match[] = {
+static const __maybe_unused struct of_device_id m41t80_of_match[] = {
 	{
 		.compatible = "st,m41t62",
 		.data = (void *)(M41T80_FEATURE_SQ | M41T80_FEATURE_SQ_ALT)
@@ -162,21 +158,20 @@ static irqreturn_t m41t80_handle_irq(int irq, void *dev_id)
 {
 	struct i2c_client *client = dev_id;
 	struct m41t80_data *m41t80 = i2c_get_clientdata(client);
-	struct mutex *lock = &m41t80->rtc->ops_lock;
 	unsigned long events = 0;
 	int flags, flags_afe;
 
-	mutex_lock(lock);
+	rtc_lock(m41t80->rtc);
 
 	flags_afe = i2c_smbus_read_byte_data(client, M41T80_REG_ALARM_MON);
 	if (flags_afe < 0) {
-		mutex_unlock(lock);
+		rtc_unlock(m41t80->rtc);
 		return IRQ_NONE;
 	}
 
 	flags = i2c_smbus_read_byte_data(client, M41T80_REG_FLAGS);
 	if (flags <= 0) {
-		mutex_unlock(lock);
+		rtc_unlock(m41t80->rtc);
 		return IRQ_NONE;
 	}
 
@@ -193,7 +188,7 @@ static irqreturn_t m41t80_handle_irq(int irq, void *dev_id)
 					  flags_afe);
 	}
 
-	mutex_unlock(lock);
+	rtc_unlock(m41t80->rtc);
 
 	return IRQ_HANDLED;
 }
@@ -238,9 +233,6 @@ static int m41t80_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	struct m41t80_data *clientdata = i2c_get_clientdata(client);
 	unsigned char buf[8];
 	int err, flags;
-
-	if (tm->tm_year < 100 || tm->tm_year > 199)
-		return -EINVAL;
 
 	buf[M41T80_REG_SSEC] = 0;
 	buf[M41T80_REG_SEC] = bin2bcd(tm->tm_sec);
@@ -404,10 +396,13 @@ static int m41t80_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	return 0;
 }
 
-static struct rtc_class_ops m41t80_rtc_ops = {
+static const struct rtc_class_ops m41t80_rtc_ops = {
 	.read_time = m41t80_rtc_read_time,
 	.set_time = m41t80_rtc_set_time,
 	.proc = m41t80_rtc_proc,
+	.read_alarm = m41t80_read_alarm,
+	.set_alarm = m41t80_set_alarm,
+	.alarm_irq_enable = m41t80_alarm_irq_enable,
 };
 
 #ifdef CONFIG_PM_SLEEP
@@ -709,7 +704,6 @@ static ssize_t wdt_read(struct file *file, char __user *buf,
 
 /**
  *	wdt_ioctl:
- *	@inode: inode of the device
  *	@file: file handle to the device
  *	@cmd: watchdog command
  *	@arg: argument pointer
@@ -748,7 +742,7 @@ static int wdt_ioctl(struct file *file, unsigned int cmd,
 			return -EINVAL;
 		wdt_margin = new_margin;
 		wdt_ping();
-		/* Fall through */
+		fallthrough;
 	case WDIOC_GETTIMEOUT:
 		return put_user(wdt_margin, (int __user *)arg);
 
@@ -791,7 +785,7 @@ static long wdt_unlocked_ioctl(struct file *file, unsigned int cmd,
  */
 static int wdt_open(struct inode *inode, struct file *file)
 {
-	if (MINOR(inode->i_rdev) == WATCHDOG_MINOR) {
+	if (iminor(inode) == WATCHDOG_MINOR) {
 		mutex_lock(&m41t80_rtc_mutex);
 		if (test_and_set_bit(0, &wdt_is_open)) {
 			mutex_unlock(&m41t80_rtc_mutex);
@@ -802,7 +796,7 @@ static int wdt_open(struct inode *inode, struct file *file)
 		 */
 		wdt_is_open = 1;
 		mutex_unlock(&m41t80_rtc_mutex);
-		return nonseekable_open(inode, file);
+		return stream_open(inode, file);
 	}
 	return -ENODEV;
 }
@@ -815,7 +809,7 @@ static int wdt_open(struct inode *inode, struct file *file)
  */
 static int wdt_release(struct inode *inode, struct file *file)
 {
-	if (MINOR(inode->i_rdev) == WATCHDOG_MINOR)
+	if (iminor(inode) == WATCHDOG_MINOR)
 		clear_bit(0, &wdt_is_open);
 	return 0;
 }
@@ -844,6 +838,7 @@ static const struct file_operations wdt_fops = {
 	.owner	= THIS_MODULE,
 	.read	= wdt_read,
 	.unlocked_ioctl = wdt_unlocked_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
 	.write	= wdt_write,
 	.open	= wdt_open,
 	.release = wdt_release,
@@ -876,7 +871,7 @@ static struct notifier_block wdt_notifier = {
 static int m41t80_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
 {
-	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
+	struct i2c_adapter *adapter = client->adapter;
 	int rc = 0;
 	struct rtc_time tm;
 	struct m41t80_data *m41t80_data = NULL;
@@ -920,15 +915,14 @@ static int m41t80_probe(struct i2c_client *client,
 			wakeup_source = false;
 		}
 	}
-	if (client->irq > 0 || wakeup_source) {
-		m41t80_rtc_ops.read_alarm = m41t80_read_alarm;
-		m41t80_rtc_ops.set_alarm = m41t80_set_alarm;
-		m41t80_rtc_ops.alarm_irq_enable = m41t80_alarm_irq_enable;
-		/* Enable the wakealarm */
+	if (client->irq > 0 || wakeup_source)
 		device_init_wakeup(&client->dev, true);
-	}
+	else
+		clear_bit(RTC_FEATURE_ALARM, m41t80_data->rtc->features);
 
 	m41t80_data->rtc->ops = &m41t80_rtc_ops;
+	m41t80_data->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
+	m41t80_data->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
 	if (client->irq <= 0) {
 		/* We cannot support UIE mode if we do not have an IRQ line */
@@ -982,7 +976,7 @@ static int m41t80_probe(struct i2c_client *client,
 		m41t80_sqw_register_clk(m41t80_data);
 #endif
 
-	rc = rtc_register_device(m41t80_data->rtc);
+	rc = devm_rtc_register_device(m41t80_data->rtc);
 	if (rc)
 		return rc;
 

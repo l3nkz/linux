@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * QLogic qlcnic NIC Driver
  * Copyright (c) 2009-2013 QLogic Corporation
- *
- * See LICENSE.qlcnic for copyright and licensing details.
  */
 
 #include <linux/types.h>
@@ -1066,7 +1065,7 @@ static int qlcnic_sriov_pf_cfg_ip_cmd(struct qlcnic_bc_trans *trans,
 {
 	struct qlcnic_vf_info *vf = trans->vf;
 	struct qlcnic_adapter *adapter = vf->adapter;
-	int err = -EIO;
+	int err;
 
 	cmd->req.arg[1] |= vf->vp->handle << 16;
 	cmd->req.arg[1] |= BIT_31;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *
  *  Support for the mpeg transport stream transfers
@@ -6,16 +7,6 @@
  *    (c) 2004 Jelle Foks <jelle@foks.us>
  *    (c) 2004 Chris Pascoe <c.pascoe@itee.uq.edu.au>
  *    (c) 2004 Gerd Knorr <kraxel@bytesex.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
  */
 
 #include "cx88.h"
@@ -533,8 +524,7 @@ static int cx8802_request_acquire(struct cx8802_driver *drv)
 		core->last_analog_input = core->input;
 		core->input = 0;
 		for (i = 0;
-		     i < (sizeof(core->board.input) /
-			  sizeof(struct cx88_input));
+		     i < ARRAY_SIZE(core->board.input);
 		     i++) {
 			if (core->board.input[i].type == CX88_VMUX_DVB) {
 				core->input = i;

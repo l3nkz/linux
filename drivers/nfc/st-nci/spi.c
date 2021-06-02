@@ -1,18 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SPI Link Layer for ST NCI based Driver
  * Copyright (C) 2014-2015 STMicroelectronics SAS. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -106,17 +95,14 @@ static int st_nci_spi_write(void *phy_id, struct sk_buff *skb)
 	 */
 	if (!r) {
 		skb_rx = alloc_skb(skb->len, GFP_KERNEL);
-		if (!skb_rx) {
-			r = -ENOMEM;
-			goto exit;
-		}
+		if (!skb_rx)
+			return -ENOMEM;
 
 		skb_put(skb_rx, skb->len);
 		memcpy(skb_rx->data, buf, skb->len);
 		ndlc_recv(phy->ndlc, skb_rx);
 	}
 
-exit:
 	return r;
 }
 

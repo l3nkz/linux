@@ -522,18 +522,20 @@ cxd2880_spi_probe(struct spi_device *spi)
 
 	dvb_spi->vcc_supply = devm_regulator_get_optional(&spi->dev, "vcc");
 	if (IS_ERR(dvb_spi->vcc_supply)) {
-		if (PTR_ERR(dvb_spi->vcc_supply) == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
+		if (PTR_ERR(dvb_spi->vcc_supply) == -EPROBE_DEFER) {
+			ret = -EPROBE_DEFER;
+			goto fail_adapter;
+		}
 		dvb_spi->vcc_supply = NULL;
 	} else {
 		ret = regulator_enable(dvb_spi->vcc_supply);
 		if (ret)
-			return ret;
+			goto fail_adapter;
 	}
 
 	dvb_spi->spi = spi;
 	mutex_init(&dvb_spi->spi_mutex);
-	dev_set_drvdata(&spi->dev, dvb_spi);
+	spi_set_drvdata(spi, dvb_spi);
 	config.spi = spi;
 	config.spi_mutex = &dvb_spi->spi_mutex;
 
@@ -630,7 +632,7 @@ cxd2880_spi_remove(struct spi_device *spi)
 		return -EINVAL;
 	}
 
-	dvb_spi = dev_get_drvdata(&spi->dev);
+	dvb_spi = spi_get_drvdata(spi);
 
 	if (!dvb_spi) {
 		pr_err("failed\n");

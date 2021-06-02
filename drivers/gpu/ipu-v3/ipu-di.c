@@ -1,16 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2010 Sascha Hauer <s.hauer@pengutronix.de>
  * Copyright (C) 2005-2009 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
  */
 #include <linux/export.h>
 #include <linux/module.h>
@@ -315,10 +306,6 @@ static void ipu_di_sync_config_noninterlaced(struct ipu_di *di,
 			.offset_src = DI_SYNC_CLK,
 			.repeat_count = sig->mode.hactive,
 			.cnt_clr_src = 5, /* Line Active */
-		} , {
-			/* unused */
-		} , {
-			/* unused */
 		} , {
 			/* unused */
 		} , {

@@ -1,22 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* GD ROM driver for the SEGA Dreamcast
  * copyright Adrian McMenamin, 2007
  * With thanks to Marcus Comstedt and Nathan Keynes
  * for work in reversing PIO and DMA
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -493,7 +479,7 @@ static int gdrom_bdops_open(struct block_device *bdev, fmode_t mode)
 {
 	int ret;
 
-	check_disk_change(bdev);
+	bdev_check_media_change(bdev);
 
 	mutex_lock(&gdrom_mutex);
 	ret = cdrom_open(gd.cd_info, bdev, mode);
@@ -532,6 +518,9 @@ static const struct block_device_operations gdrom_bdops = {
 	.release		= gdrom_bdops_release,
 	.check_events		= gdrom_bdops_check_events,
 	.ioctl			= gdrom_bdops_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl		= blkdev_compat_ptr_ioctl,
+#endif
 };
 
 static irqreturn_t gdrom_command_interrupt(int irq, void *dev_id)
@@ -594,7 +583,8 @@ static blk_status_t gdrom_readdisk_dma(struct request *req)
 	read_command->cmd[1] = 0x20;
 	block = blk_rq_pos(req)/GD_TO_BLK + GD_SESSION_OFFSET;
 	block_cnt = blk_rq_sectors(req)/GD_TO_BLK;
-	__raw_writel(virt_to_phys(bio_data(req->bio)), GDROM_DMA_STARTADDR_REG);
+	__raw_writel(page_to_phys(bio_page(req->bio)) + bio_offset(req->bio),
+			GDROM_DMA_STARTADDR_REG);
 	__raw_writel(block_cnt * GDROM_HARD_SECTOR, GDROM_DMA_LENGTH_REG);
 	__raw_writel(1, GDROM_DMA_DIRECTION_REG);
 	__raw_writel(1, GDROM_DMA_ENABLE_REG);
@@ -754,9 +744,16 @@ static const struct blk_mq_ops gdrom_mq_ops = {
 static int probe_gdrom(struct platform_device *devptr)
 {
 	int err;
+
+	/*
+	 * Ensure our "one" device is initialized properly in case of previous
+	 * usages of it
+	 */
+	memset(&gd, 0, sizeof(gd));
+
 	/* Start the device */
 	if (gdrom_execute_diagnostic() != 1) {
-		pr_warning("ATA Probe for GDROM failed\n");
+		pr_warn("ATA Probe for GDROM failed\n");
 		return -ENODEV;
 	}
 	/* Print out firmware ID */
@@ -781,11 +778,12 @@ static int probe_gdrom(struct platform_device *devptr)
 		goto probe_fail_no_disk;
 	}
 	probe_gdrom_setupdisk();
-	if (register_cdrom(gd.cd_info)) {
+	if (register_cdrom(gd.disk, gd.cd_info)) {
 		err = -ENODEV;
 		goto probe_fail_cdrom_register;
 	}
 	gd.disk->fops = &gdrom_bdops;
+	gd.disk->events = DISK_EVENT_MEDIA_CHANGE;
 	/* latch on to the interrupt */
 	err = gdrom_set_interrupt_handlers();
 	if (err)
@@ -798,8 +796,6 @@ static int probe_gdrom(struct platform_device *devptr)
 		gd.gdrom_rq = NULL;
 		goto probe_fail_requestq;
 	}
-
-	blk_queue_bounce_limit(gd.gdrom_rq, BLK_BOUNCE_HIGH);
 
 	err = probe_gdrom_setupqueue();
 	if (err)
@@ -827,7 +823,7 @@ probe_fail_no_disk:
 probe_fail_no_mem:
 	unregister_blkdev(gdrom_major, GDROM_DEV_NAME);
 	gdrom_major = 0;
-	pr_warning("Probe failed - error is 0x%X\n", err);
+	pr_warn("Probe failed - error is 0x%X\n", err);
 	return err;
 }
 
@@ -841,6 +837,8 @@ static int remove_gdrom(struct platform_device *devptr)
 	if (gdrom_major)
 		unregister_blkdev(gdrom_major, GDROM_DEV_NAME);
 	unregister_cdrom(gd.cd_info);
+	kfree(gd.cd_info);
+	kfree(gd.toc);
 
 	return 0;
 }
@@ -856,7 +854,7 @@ static struct platform_driver gdrom_driver = {
 static int __init init_gdrom(void)
 {
 	int rc;
-	gd.toc = NULL;
+
 	rc = platform_driver_register(&gdrom_driver);
 	if (rc)
 		return rc;
@@ -872,8 +870,6 @@ static void __exit exit_gdrom(void)
 {
 	platform_device_unregister(pd);
 	platform_driver_unregister(&gdrom_driver);
-	kfree(gd.toc);
-	kfree(gd.cd_info);
 }
 
 module_init(init_gdrom);

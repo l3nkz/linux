@@ -382,12 +382,11 @@ static int mei_wdt_register(struct mei_wdt *wdt)
 
 	watchdog_set_drvdata(&wdt->wdd, wdt);
 	watchdog_stop_on_reboot(&wdt->wdd);
+	watchdog_stop_on_unregister(&wdt->wdd);
 
 	ret = watchdog_register_device(&wdt->wdd);
-	if (ret) {
-		dev_err(dev, "unable to register watchdog device = %d.\n", ret);
+	if (ret)
 		watchdog_set_drvdata(&wdt->wdd, NULL);
-	}
 
 	wdt->state = MEI_WDT_IDLE;
 
@@ -539,38 +538,23 @@ static void dbgfs_unregister(struct mei_wdt *wdt)
 	wdt->dbgfs_dir = NULL;
 }
 
-static int dbgfs_register(struct mei_wdt *wdt)
+static void dbgfs_register(struct mei_wdt *wdt)
 {
-	struct dentry *dir, *f;
+	struct dentry *dir;
 
 	dir = debugfs_create_dir(KBUILD_MODNAME, NULL);
-	if (!dir)
-		return -ENOMEM;
-
 	wdt->dbgfs_dir = dir;
-	f = debugfs_create_file("state", S_IRUSR, dir, wdt, &dbgfs_fops_state);
-	if (!f)
-		goto err;
 
-	f = debugfs_create_file("activation",  S_IRUSR,
-				dir, wdt, &dbgfs_fops_activation);
-	if (!f)
-		goto err;
+	debugfs_create_file("state", S_IRUSR, dir, wdt, &dbgfs_fops_state);
 
-	return 0;
-err:
-	dbgfs_unregister(wdt);
-	return -ENODEV;
+	debugfs_create_file("activation", S_IRUSR, dir, wdt,
+			    &dbgfs_fops_activation);
 }
 
 #else
 
 static inline void dbgfs_unregister(struct mei_wdt *wdt) {}
-
-static inline int dbgfs_register(struct mei_wdt *wdt)
-{
-	return 0;
-}
+static inline void dbgfs_register(struct mei_wdt *wdt) {}
 #endif /* CONFIG_DEBUG_FS */
 
 static int mei_wdt_probe(struct mei_cl_device *cldev,
@@ -623,8 +607,7 @@ static int mei_wdt_probe(struct mei_cl_device *cldev,
 	if (ret)
 		goto err_disable;
 
-	if (dbgfs_register(wdt))
-		dev_warn(&cldev->dev, "cannot register debugfs\n");
+	dbgfs_register(wdt);
 
 	return 0;
 
@@ -637,7 +620,7 @@ err_out:
 	return ret;
 }
 
-static int mei_wdt_remove(struct mei_cl_device *cldev)
+static void mei_wdt_remove(struct mei_cl_device *cldev)
 {
 	struct mei_wdt *wdt = mei_cldev_get_drvdata(cldev);
 
@@ -654,8 +637,6 @@ static int mei_wdt_remove(struct mei_cl_device *cldev)
 	dbgfs_unregister(wdt);
 
 	kfree(wdt);
-
-	return 0;
 }
 
 #define MEI_UUID_WD UUID_LE(0x05B79A6F, 0x4628, 0x4D7F, \

@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 Cavium, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License
- * as published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -31,6 +28,13 @@
 
 #define DRV_NAME	"nicvf"
 #define DRV_VERSION	"1.0"
+
+/* NOTE: Packets bigger than 1530 are split across multiple pages and XDP needs
+ * the buffer to be contiguous. Allow XDP to be set up only if we don't exceed
+ * this value, keeping headroom for the 14 byte Ethernet header and two
+ * VLAN tags (for QinQ)
+ */
+#define MAX_XDP_MTU	(1530 - ETH_HLEN - VLAN_HLEN * 2)
 
 /* Supported devices */
 static const struct pci_device_id nicvf_id_table[] = {
@@ -122,8 +126,7 @@ static void nicvf_write_to_mbx(struct nicvf *nic, union nic_mbx *mbx)
 
 int nicvf_send_msg_to_pf(struct nicvf *nic, union nic_mbx *mbx)
 {
-	int timeout = NIC_MBOX_MSG_TIMEOUT;
-	int sleep = 10;
+	unsigned long timeout;
 	int ret = 0;
 
 	mutex_lock(&nic->rx_mode_mtx);
@@ -133,6 +136,7 @@ int nicvf_send_msg_to_pf(struct nicvf *nic, union nic_mbx *mbx)
 
 	nicvf_write_to_mbx(nic, mbx);
 
+	timeout = jiffies + msecs_to_jiffies(NIC_MBOX_MSG_TIMEOUT);
 	/* Wait for previous message to be acked, timeout 2sec */
 	while (!nic->pf_acked) {
 		if (nic->pf_nacked) {
@@ -142,11 +146,10 @@ int nicvf_send_msg_to_pf(struct nicvf *nic, union nic_mbx *mbx)
 			ret = -EINVAL;
 			break;
 		}
-		msleep(sleep);
+		usleep_range(8000, 10000);
 		if (nic->pf_acked)
 			break;
-		timeout -= sleep;
-		if (!timeout) {
+		if (time_after(jiffies, timeout)) {
 			netdev_err(nic->netdev,
 				   "PF didn't ACK to mbox msg 0x%02x from VF%d\n",
 				   (mbx->msg.msg & 0xFF), nic->vf_id);
@@ -527,6 +530,7 @@ static inline bool nicvf_xdp_rx(struct nicvf *nic, struct bpf_prog *prog,
 				struct cqe_rx_t *cqe_rx, struct snd_queue *sq,
 				struct rcv_queue *rq, struct sk_buff **skb)
 {
+	unsigned char *hard_start, *data;
 	struct xdp_buff xdp;
 	struct page *page;
 	u32 action;
@@ -544,11 +548,11 @@ static inline bool nicvf_xdp_rx(struct nicvf *nic, struct bpf_prog *prog,
 	cpu_addr = (u64)phys_to_virt(cpu_addr);
 	page = virt_to_page((void *)cpu_addr);
 
-	xdp.data_hard_start = page_address(page);
-	xdp.data = (void *)cpu_addr;
-	xdp_set_data_meta_invalid(&xdp);
-	xdp.data_end = xdp.data + len;
-	xdp.rxq = &rq->xdp_rxq;
+	xdp_init_buff(&xdp, RCV_FRAG_LEN + XDP_PACKET_HEADROOM,
+		      &rq->xdp_rxq);
+	hard_start = page_address(page);
+	data = (unsigned char *)cpu_addr;
+	xdp_prepare_buff(&xdp, hard_start, data - hard_start, len, false);
 	orig_data = xdp.data;
 
 	rcu_read_lock();
@@ -590,10 +594,10 @@ static inline bool nicvf_xdp_rx(struct nicvf *nic, struct bpf_prog *prog,
 		return true;
 	default:
 		bpf_warn_invalid_xdp_action(action);
-		/* fall through */
+		fallthrough;
 	case XDP_ABORTED:
 		trace_xdp_exception(nic->netdev, prog, action);
-		/* fall through */
+		fallthrough;
 	case XDP_DROP:
 		/* Check if it's a recycled page, if not
 		 * unmap the DMA mapping.
@@ -981,9 +985,9 @@ static int nicvf_poll(struct napi_struct *napi, int budget)
  *
  * As of now only CQ errors are handled
  */
-static void nicvf_handle_qs_err(unsigned long data)
+static void nicvf_handle_qs_err(struct tasklet_struct *t)
 {
-	struct nicvf *nic = (struct nicvf *)data;
+	struct nicvf *nic = from_tasklet(nic, t, qs_err_task);
 	struct queue_set *qs = nic->qs;
 	int qidx;
 	u64 status;
@@ -1328,10 +1332,11 @@ int nicvf_stop(struct net_device *netdev)
 	struct nicvf_cq_poll *cq_poll = NULL;
 	union nic_mbx mbx = {};
 
-	cancel_delayed_work_sync(&nic->link_change_work);
-
 	/* wait till all queued set_rx_mode tasks completes */
-	drain_workqueue(nic->nicvf_rx_mode_wq);
+	if (nic->nicvf_rx_mode_wq) {
+		cancel_delayed_work_sync(&nic->link_change_work);
+		drain_workqueue(nic->nicvf_rx_mode_wq);
+	}
 
 	mbx.msg.msg = NIC_MBOX_MSG_SHUTDOWN;
 	nicvf_send_msg_to_pf(nic, &mbx);
@@ -1452,7 +1457,8 @@ int nicvf_open(struct net_device *netdev)
 	struct nicvf_cq_poll *cq_poll = NULL;
 
 	/* wait till all queued set_rx_mode tasks completes if any */
-	drain_workqueue(nic->nicvf_rx_mode_wq);
+	if (nic->nicvf_rx_mode_wq)
+		drain_workqueue(nic->nicvf_rx_mode_wq);
 
 	netif_carrier_off(netdev);
 
@@ -1487,12 +1493,10 @@ int nicvf_open(struct net_device *netdev)
 	}
 
 	/* Init tasklet for handling Qset err interrupt */
-	tasklet_init(&nic->qs_err_task, nicvf_handle_qs_err,
-		     (unsigned long)nic);
+	tasklet_setup(&nic->qs_err_task, nicvf_handle_qs_err);
 
 	/* Init RBDR tasklet which will refill RBDR */
-	tasklet_init(&nic->rbdr_task, nicvf_rbdr_task,
-		     (unsigned long)nic);
+	tasklet_setup(&nic->rbdr_task, nicvf_rbdr_task);
 	INIT_DELAYED_WORK(&nic->rbdr_work, nicvf_rbdr_work);
 
 	/* Configure CPI alorithm */
@@ -1550,10 +1554,12 @@ int nicvf_open(struct net_device *netdev)
 	/* Send VF config done msg to PF */
 	nicvf_send_cfg_done(nic);
 
-	INIT_DELAYED_WORK(&nic->link_change_work,
-			  nicvf_link_status_check_task);
-	queue_delayed_work(nic->nicvf_rx_mode_wq,
-			   &nic->link_change_work, 0);
+	if (nic->nicvf_rx_mode_wq) {
+		INIT_DELAYED_WORK(&nic->link_change_work,
+				  nicvf_link_status_check_task);
+		queue_delayed_work(nic->nicvf_rx_mode_wq,
+				   &nic->link_change_work, 0);
+	}
 
 	return 0;
 cleanup:
@@ -1577,6 +1583,15 @@ static int nicvf_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct nicvf *nic = netdev_priv(netdev);
 	int orig_mtu = netdev->mtu;
+
+	/* For now just support only the usual MTU sized frames,
+	 * plus some headroom for VLAN, QinQ.
+	 */
+	if (nic->xdp_prog && new_mtu > MAX_XDP_MTU) {
+		netdev_warn(netdev, "Jumbo frames not yet supported with XDP, current MTU %d.\n",
+			    netdev->mtu);
+		return -EINVAL;
+	}
 
 	netdev->mtu = new_mtu;
 
@@ -1724,7 +1739,7 @@ static void nicvf_get_stats64(struct net_device *netdev,
 
 }
 
-static void nicvf_tx_timeout(struct net_device *dev)
+static void nicvf_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	struct nicvf *nic = netdev_priv(dev);
 
@@ -1826,8 +1841,10 @@ static int nicvf_xdp_setup(struct nicvf *nic, struct bpf_prog *prog)
 	bool bpf_attached = false;
 	int ret = 0;
 
-	/* For now just support only the usual MTU sized frames */
-	if (prog && (dev->mtu > 1500)) {
+	/* For now just support only the usual MTU sized frames,
+	 * plus some headroom for VLAN, QinQ.
+	 */
+	if (prog && dev->mtu > MAX_XDP_MTU) {
 		netdev_warn(dev, "Jumbo frames not yet supported with XDP, current MTU %d.\n",
 			    dev->mtu);
 		return -EOPNOTSUPP;
@@ -1857,13 +1874,8 @@ static int nicvf_xdp_setup(struct nicvf *nic, struct bpf_prog *prog)
 
 	if (nic->xdp_prog) {
 		/* Attach BPF program */
-		nic->xdp_prog = bpf_prog_add(nic->xdp_prog, nic->rx_queues - 1);
-		if (!IS_ERR(nic->xdp_prog)) {
-			bpf_attached = true;
-		} else {
-			ret = PTR_ERR(nic->xdp_prog);
-			nic->xdp_prog = NULL;
-		}
+		bpf_prog_add(nic->xdp_prog, nic->rx_queues - 1);
+		bpf_attached = true;
 	}
 
 	/* Calculate Tx queues needed for XDP and network stack */
@@ -1892,9 +1904,6 @@ static int nicvf_xdp(struct net_device *netdev, struct netdev_bpf *xdp)
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
 		return nicvf_xdp_setup(nic, xdp->prog);
-	case XDP_QUERY_PROG:
-		xdp->prog_id = nic->xdp_prog ? nic->xdp_prog->aux->id : 0;
-		return 0;
 	default:
 		return -EINVAL;
 	}
@@ -2028,11 +2037,11 @@ static void nicvf_set_rx_mode_task(struct work_struct *work_arg)
 	/* Save message data locally to prevent them from
 	 * being overwritten by next ndo_set_rx_mode call().
 	 */
-	spin_lock(&nic->rx_mode_wq_lock);
+	spin_lock_bh(&nic->rx_mode_wq_lock);
 	mode = vf_work->mode;
 	mc = vf_work->mc;
 	vf_work->mc = NULL;
-	spin_unlock(&nic->rx_mode_wq_lock);
+	spin_unlock_bh(&nic->rx_mode_wq_lock);
 
 	__nicvf_set_rx_mode_task(mode, mc, nic);
 }
@@ -2056,8 +2065,8 @@ static void nicvf_set_rx_mode(struct net_device *netdev)
 			mode |= BGX_XCAST_MCAST_FILTER;
 			/* here we need to copy mc addrs */
 			if (netdev_mc_count(netdev)) {
-				mc_list = kmalloc(offsetof(typeof(*mc_list),
-							   mc[netdev_mc_count(netdev)]),
+				mc_list = kmalloc(struct_size(mc_list, mc,
+							      netdev_mc_count(netdev)),
 						  GFP_ATOMIC);
 				if (unlikely(!mc_list))
 					return;
@@ -2166,6 +2175,9 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		nic->max_queues *= 2;
 	nic->ptp_clock = ptp_clock;
 
+	/* Initialize mutex that serializes usage of VF's mailbox */
+	mutex_init(&nic->rx_mode_mtx);
+
 	/* MAP VF's configuration registers */
 	nic->reg_base = pcim_iomap(pdev, PCI_CFG_REG_BAR_NUM, 0);
 	if (!nic->reg_base) {
@@ -2234,9 +2246,14 @@ static int nicvf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	nic->nicvf_rx_mode_wq = alloc_ordered_workqueue("nicvf_rx_mode_wq_VF%d",
 							WQ_MEM_RECLAIM,
 							nic->vf_id);
+	if (!nic->nicvf_rx_mode_wq) {
+		err = -ENOMEM;
+		dev_err(dev, "Failed to allocate work queue\n");
+		goto err_unregister_interrupts;
+	}
+
 	INIT_WORK(&nic->rx_mode_work.work, nicvf_set_rx_mode_task);
 	spin_lock_init(&nic->rx_mode_wq_lock);
-	mutex_init(&nic->rx_mode_mtx);
 
 	err = register_netdev(netdev);
 	if (err) {

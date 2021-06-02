@@ -14,7 +14,7 @@ const struct fpu_struct init_fpuregs = {
 	.fd_regs = {[0 ... 31] = sNAN64},
 	.fpcsr = FPCSR_INIT,
 #if IS_ENABLED(CONFIG_SUPPORT_DENORMAL_ARITHMETIC)
-	.UDF_trap = 0
+	.UDF_IEX_trap = 0
 #endif
 };
 
@@ -45,7 +45,7 @@ void save_fpu(struct task_struct *tsk)
 			      :	/* no output */
 			      : "r" (&tsk->thread.fpu)
 			      : "memory");
-		/* fall through */
+		fallthrough;
 	case SP32_DP16_reg:
 		asm volatile ("fsdi $fd15, [%0+0x78]\n\t"
 			      "fsdi $fd14, [%0+0x70]\n\t"
@@ -58,7 +58,7 @@ void save_fpu(struct task_struct *tsk)
 			      :	/* no output */
 			      : "r" (&tsk->thread.fpu)
 			      : "memory");
-		/* fall through */
+		fallthrough;
 	case SP16_DP8_reg:
 		asm volatile ("fsdi $fd7,  [%0+0x38]\n\t"
 			      "fsdi $fd6,  [%0+0x30]\n\t"
@@ -67,7 +67,7 @@ void save_fpu(struct task_struct *tsk)
 			      :	/* no output */
 			      : "r" (&tsk->thread.fpu)
 			      : "memory");
-		/* fall through */
+		fallthrough;
 	case SP8_DP4_reg:
 		asm volatile ("fsdi $fd3,  [%1+0x18]\n\t"
 			      "fsdi $fd2,  [%1+0x10]\n\t"
@@ -108,7 +108,7 @@ void load_fpu(const struct fpu_struct *fpregs)
 			      "fldi $fd16, [%0+0x80]\n\t"
 			      :	/* no output */
 			      : "r" (fpregs));
-		/* fall through */
+		fallthrough;
 	case SP32_DP16_reg:
 		asm volatile ("fldi $fd15, [%0+0x78]\n\t"
 			      "fldi $fd14, [%0+0x70]\n\t"
@@ -120,7 +120,7 @@ void load_fpu(const struct fpu_struct *fpregs)
 			      "fldi $fd8,  [%0+0x40]\n\t"
 			      :	/* no output */
 			      : "r" (fpregs));
-		/* fall through */
+		fallthrough;
 	case SP16_DP8_reg:
 		asm volatile ("fldi $fd7,  [%0+0x38]\n\t"
 			      "fldi $fd6,  [%0+0x30]\n\t"
@@ -128,7 +128,7 @@ void load_fpu(const struct fpu_struct *fpregs)
 			      "fldi $fd4,  [%0+0x20]\n\t"
 			      :	/* no output */
 			      : "r" (fpregs));
-		/* fall through */
+		fallthrough;
 	case SP8_DP4_reg:
 		asm volatile ("fldi $fd3,  [%1+0x18]\n\t"
 			      "fldi $fd2,  [%1+0x10]\n\t"
@@ -178,7 +178,7 @@ inline void do_fpu_context_switch(struct pt_regs *regs)
 		/* First time FPU user.  */
 		load_fpu(&init_fpuregs);
 #if IS_ENABLED(CONFIG_SUPPORT_DENORMAL_ARITHMETIC)
-		current->thread.fpu.UDF_trap = init_fpuregs.UDF_trap;
+		current->thread.fpu.UDF_IEX_trap = init_fpuregs.UDF_IEX_trap;
 #endif
 		set_used_math();
 	}
@@ -206,7 +206,7 @@ inline void handle_fpu_exception(struct pt_regs *regs)
 	unsigned int fpcsr;
 	int si_code = 0, si_signo = SIGFPE;
 #if IS_ENABLED(CONFIG_SUPPORT_DENORMAL_ARITHMETIC)
-	unsigned long redo_except = FPCSR_mskDNIT|FPCSR_mskUDFT;
+	unsigned long redo_except = FPCSR_mskDNIT|FPCSR_mskUDFT|FPCSR_mskIEXT;
 #else
 	unsigned long redo_except = FPCSR_mskDNIT;
 #endif
@@ -215,20 +215,17 @@ inline void handle_fpu_exception(struct pt_regs *regs)
 	fpcsr = current->thread.fpu.fpcsr;
 
 	if (fpcsr & redo_except) {
-#if IS_ENABLED(CONFIG_SUPPORT_DENORMAL_ARITHMETIC)
-		if (fpcsr & FPCSR_mskUDFT)
-			current->thread.fpu.fpcsr &= ~FPCSR_mskIEX;
-#endif
 		si_signo = do_fpuemu(regs, &current->thread.fpu);
 		fpcsr = current->thread.fpu.fpcsr;
-		if (!si_signo)
+		if (!si_signo) {
+			current->thread.fpu.fpcsr &= ~(redo_except);
 			goto done;
+		}
 	} else if (fpcsr & FPCSR_mskRIT) {
 		if (!user_mode(regs))
 			do_exit(SIGILL);
 		si_signo = SIGILL;
 	}
-
 
 	switch (si_signo) {
 	case SIGFPE:
@@ -246,7 +243,7 @@ inline void handle_fpu_exception(struct pt_regs *regs)
 	}
 
 	force_sig_fault(si_signo, si_code,
-			(void __user *)instruction_pointer(regs), current);
+			(void __user *)instruction_pointer(regs));
 done:
 	own_fpu();
 }

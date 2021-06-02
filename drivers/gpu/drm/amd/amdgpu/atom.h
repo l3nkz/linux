@@ -26,7 +26,8 @@
 #define ATOM_H
 
 #include <linux/types.h>
-#include <drm/drmP.h>
+
+struct drm_device;
 
 #define ATOM_BIOS_MAGIC		0xAA55
 #define ATOM_ATI_MAGIC_PTR	0x30
@@ -115,8 +116,6 @@ struct card_info {
 	struct drm_device *dev;
 	void (* reg_write)(struct card_info *, uint32_t, uint32_t);   /*  filled by driver */
 	uint32_t (* reg_read)(struct card_info *, uint32_t);          /*  filled by driver */
-	void (* ioreg_write)(struct card_info *, uint32_t, uint32_t);   /*  filled by driver */
-	uint32_t (* ioreg_read)(struct card_info *, uint32_t);          /*  filled by driver */
 	void (* mc_write)(struct card_info *, uint32_t, uint32_t);   /*  filled by driver */
 	uint32_t (* mc_read)(struct card_info *, uint32_t);          /*  filled by driver */
 	void (* pll_write)(struct card_info *, uint32_t, uint32_t);   /*  filled by driver */

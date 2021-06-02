@@ -1,15 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * NVMe over Fabrics common host code.
  * Copyright (c) 2015-2016 HGST, a Western Digital Company.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 #ifndef _NVME_FABRICS_H
 #define _NVME_FABRICS_H 1
@@ -23,6 +15,15 @@
 #define NVMF_DEF_RECONNECT_DELAY	10
 /* default to 600 seconds of reconnect attempts before giving up */
 #define NVMF_DEF_CTRL_LOSS_TMO		600
+/* default is -1: the fail fast mechanism is disabled  */
+#define NVMF_DEF_FAIL_FAST_TMO		-1
+
+/*
+ * Reserved one command for internal usage.  This command is used for sending
+ * the connect command, as well as for the keep alive command on the admin
+ * queue once live.
+ */
+#define NVMF_RESERVED_TAGS	1
 
 /*
  * Define a host as seen by the target.  We allocate one at boot, but also
@@ -63,6 +64,8 @@ enum {
 	NVMF_OPT_DATA_DIGEST	= 1 << 16,
 	NVMF_OPT_NR_WRITE_QUEUES = 1 << 17,
 	NVMF_OPT_NR_POLL_QUEUES = 1 << 18,
+	NVMF_OPT_TOS		= 1 << 19,
+	NVMF_OPT_FAIL_FAST_TMO	= 1 << 20,
 };
 
 /**
@@ -95,6 +98,8 @@ enum {
  * @data_digest: generate/verify data digest (TCP)
  * @nr_write_queues: number of queues for write I/O
  * @nr_poll_queues: number of queues for polling I/O
+ * @tos: type of service
+ * @fast_io_fail_tmo: Fast I/O fail timeout in seconds
  */
 struct nvmf_ctrl_options {
 	unsigned		mask;
@@ -116,6 +121,8 @@ struct nvmf_ctrl_options {
 	bool			data_digest;
 	unsigned int		nr_write_queues;
 	unsigned int		nr_poll_queues;
+	int			tos;
+	int			fast_io_fail_tmo;
 };
 
 /*
@@ -177,20 +184,7 @@ void nvmf_unregister_transport(struct nvmf_transport_ops *ops);
 void nvmf_free_options(struct nvmf_ctrl_options *opts);
 int nvmf_get_address(struct nvme_ctrl *ctrl, char *buf, int size);
 bool nvmf_should_reconnect(struct nvme_ctrl *ctrl);
-blk_status_t nvmf_fail_nonready_command(struct nvme_ctrl *ctrl,
-		struct request *rq);
-bool __nvmf_check_ready(struct nvme_ctrl *ctrl, struct request *rq,
-		bool queue_live);
 bool nvmf_ip_options_match(struct nvme_ctrl *ctrl,
 		struct nvmf_ctrl_options *opts);
-
-static inline bool nvmf_check_ready(struct nvme_ctrl *ctrl, struct request *rq,
-		bool queue_live)
-{
-	if (likely(ctrl->state == NVME_CTRL_LIVE ||
-		   ctrl->state == NVME_CTRL_ADMIN_ONLY))
-		return true;
-	return __nvmf_check_ready(ctrl, rq, queue_live);
-}
 
 #endif /* _NVME_FABRICS_H */

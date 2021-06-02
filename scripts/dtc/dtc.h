@@ -1,24 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef DTC_H
 #define DTC_H
 
 /*
  * (C) Copyright David Gibson <dwg@au1.ibm.com>, IBM Corporation.  2005.
- *
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
- *                                                                   USA
  */
 
 #include <stdio.h>
@@ -66,6 +51,37 @@ extern int annotate;		/* annotate .dts with input source location */
 
 typedef uint32_t cell_t;
 
+static inline uint16_t dtb_ld16(const void *p)
+{
+	const uint8_t *bp = (const uint8_t *)p;
+
+	return ((uint16_t)bp[0] << 8)
+		| bp[1];
+}
+
+static inline uint32_t dtb_ld32(const void *p)
+{
+	const uint8_t *bp = (const uint8_t *)p;
+
+	return ((uint32_t)bp[0] << 24)
+		| ((uint32_t)bp[1] << 16)
+		| ((uint32_t)bp[2] << 8)
+		| bp[3];
+}
+
+static inline uint64_t dtb_ld64(const void *p)
+{
+	const uint8_t *bp = (const uint8_t *)p;
+
+	return ((uint64_t)bp[0] << 56)
+		| ((uint64_t)bp[1] << 48)
+		| ((uint64_t)bp[2] << 40)
+		| ((uint64_t)bp[3] << 32)
+		| ((uint64_t)bp[4] << 24)
+		| ((uint64_t)bp[5] << 16)
+		| ((uint64_t)bp[6] << 8)
+		| bp[7];
+}
 
 #define streq(a, b)	(strcmp((a), (b)) == 0)
 #define strstarts(s, prefix)	(strncmp((s), (prefix), strlen(prefix)) == 0)
@@ -89,13 +105,13 @@ extern const char *markername(enum markertype markertype);
 
 struct  marker {
 	enum markertype type;
-	int offset;
+	unsigned int offset;
 	char *ref;
 	struct marker *next;
 };
 
 struct data {
-	int len;
+	unsigned int len;
 	char *val;
 	struct marker *markers;
 };
@@ -113,7 +129,7 @@ size_t type_marker_length(struct marker *m);
 
 void data_free(struct data d);
 
-struct data data_grow_for(struct data d, int xlen);
+struct data data_grow_for(struct data d, unsigned int xlen);
 
 struct data data_copy_mem(const char *mem, int len);
 struct data data_copy_escape_string(const char *s, int len);
@@ -231,12 +247,13 @@ void add_child(struct node *parent, struct node *child);
 void delete_node_by_name(struct node *parent, char *name);
 void delete_node(struct node *node);
 void append_to_property(struct node *node,
-			char *name, const void *data, int len);
+			char *name, const void *data, int len,
+			enum markertype type);
 
 const char *get_unitname(struct node *node);
 struct property *get_property(struct node *node, const char *propname);
 cell_t propval_cell(struct property *prop);
-cell_t propval_cell_n(struct property *prop, int n);
+cell_t propval_cell_n(struct property *prop, unsigned int n);
 struct property *get_property_by_label(struct node *tree, const char *label,
 				       struct node **node);
 struct marker *get_marker_label(struct node *tree, const char *label,

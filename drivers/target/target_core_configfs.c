@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*******************************************************************************
  * Filename:  target_core_configfs.c
  *
@@ -9,15 +10,6 @@
  *
  * based on configfs Copyright (C) 2005 Oracle.  All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  ****************************************************************************/
 
 #include <linux/module.h>
@@ -401,10 +393,6 @@ static int target_fabric_tf_ops_check(const struct target_core_fabric_ops *tfo)
 		pr_err("Missing tfo->write_pending()\n");
 		return -EINVAL;
 	}
-	if (!tfo->write_pending_status) {
-		pr_err("Missing tfo->write_pending_status()\n");
-		return -EINVAL;
-	}
 	if (!tfo->set_default_node_attributes) {
 		pr_err("Missing tfo->set_default_node_attributes()\n");
 		return -EINVAL;
@@ -696,7 +684,9 @@ static ssize_t emulate_ua_intlck_ctrl_store(struct config_item *item,
 	if (ret < 0)
 		return ret;
 
-	if (val != 0 && val != 1 && val != 2) {
+	if (val != TARGET_UA_INTLCK_CTRL_CLEAR
+	 && val != TARGET_UA_INTLCK_CTRL_NO_CLEAR
+	 && val != TARGET_UA_INTLCK_CTRL_ESTABLISH_UA) {
 		pr_err("Illegal value %d\n", val);
 		return -EINVAL;
 	}
@@ -1109,19 +1099,71 @@ static ssize_t block_size_store(struct config_item *item,
 static ssize_t alua_support_show(struct config_item *item, char *page)
 {
 	struct se_dev_attrib *da = to_attrib(item);
-	u8 flags = da->da_dev->transport->transport_flags;
+	u8 flags = da->da_dev->transport_flags;
 
 	return snprintf(page, PAGE_SIZE, "%d\n",
 			flags & TRANSPORT_FLAG_PASSTHROUGH_ALUA ? 0 : 1);
 }
 
+static ssize_t alua_support_store(struct config_item *item,
+		const char *page, size_t count)
+{
+	struct se_dev_attrib *da = to_attrib(item);
+	struct se_device *dev = da->da_dev;
+	bool flag;
+	int ret;
+
+	if (!(dev->transport->transport_flags_changeable &
+	      TRANSPORT_FLAG_PASSTHROUGH_ALUA)) {
+		pr_err("dev[%p]: Unable to change SE Device alua_support:"
+			" alua_support has fixed value\n", dev);
+		return -EINVAL;
+	}
+
+	ret = strtobool(page, &flag);
+	if (ret < 0)
+		return ret;
+
+	if (flag)
+		dev->transport_flags &= ~TRANSPORT_FLAG_PASSTHROUGH_ALUA;
+	else
+		dev->transport_flags |= TRANSPORT_FLAG_PASSTHROUGH_ALUA;
+	return count;
+}
+
 static ssize_t pgr_support_show(struct config_item *item, char *page)
 {
 	struct se_dev_attrib *da = to_attrib(item);
-	u8 flags = da->da_dev->transport->transport_flags;
+	u8 flags = da->da_dev->transport_flags;
 
 	return snprintf(page, PAGE_SIZE, "%d\n",
 			flags & TRANSPORT_FLAG_PASSTHROUGH_PGR ? 0 : 1);
+}
+
+static ssize_t pgr_support_store(struct config_item *item,
+		const char *page, size_t count)
+{
+	struct se_dev_attrib *da = to_attrib(item);
+	struct se_device *dev = da->da_dev;
+	bool flag;
+	int ret;
+
+	if (!(dev->transport->transport_flags_changeable &
+	      TRANSPORT_FLAG_PASSTHROUGH_PGR)) {
+		pr_err("dev[%p]: Unable to change SE Device pgr_support:"
+			" pgr_support has fixed value\n", dev);
+		return -EINVAL;
+	}
+
+	ret = strtobool(page, &flag);
+	if (ret < 0)
+		return ret;
+
+	if (flag)
+		dev->transport_flags &= ~TRANSPORT_FLAG_PASSTHROUGH_PGR;
+	else
+		dev->transport_flags |= TRANSPORT_FLAG_PASSTHROUGH_PGR;
+	return count;
 }
 
 CONFIGFS_ATTR(, emulate_model_alias);
@@ -1156,8 +1198,8 @@ CONFIGFS_ATTR(, unmap_granularity);
 CONFIGFS_ATTR(, unmap_granularity_alignment);
 CONFIGFS_ATTR(, unmap_zeroes_data);
 CONFIGFS_ATTR(, max_write_same_len);
-CONFIGFS_ATTR_RO(, alua_support);
-CONFIGFS_ATTR_RO(, pgr_support);
+CONFIGFS_ATTR(, alua_support);
+CONFIGFS_ATTR(, pgr_support);
 
 /*
  * dev_attrib attributes for devices using the target core SBC/SPC
@@ -1213,11 +1255,23 @@ struct configfs_attribute *passthrough_attrib_attrs[] = {
 	&attr_hw_block_size,
 	&attr_hw_max_sectors,
 	&attr_hw_queue_depth,
+	&attr_emulate_pr,
 	&attr_alua_support,
 	&attr_pgr_support,
 	NULL,
 };
 EXPORT_SYMBOL(passthrough_attrib_attrs);
+
+/*
+ * pr related dev_attrib attributes for devices passing through CDBs,
+ * but allowing in core pr emulation.
+ */
+struct configfs_attribute *passthrough_pr_attrib_attrs[] = {
+	&attr_enforce_pr_isids,
+	&attr_force_pr_aptpl,
+	NULL,
+};
+EXPORT_SYMBOL(passthrough_pr_attrib_attrs);
 
 TB_CIT_SETUP_DRV(dev_attrib, NULL, NULL);
 TB_CIT_SETUP_DRV(dev_action, NULL, NULL);
@@ -1229,6 +1283,29 @@ TB_CIT_SETUP_DRV(dev_action, NULL, NULL);
 static struct t10_wwn *to_t10_wwn(struct config_item *item)
 {
 	return container_of(to_config_group(item), struct t10_wwn, t10_wwn_group);
+}
+
+static ssize_t target_check_inquiry_data(char *buf)
+{
+	size_t len;
+	int i;
+
+	len = strlen(buf);
+
+	/*
+	 * SPC 4.3.1:
+	 * ASCII data fields shall contain only ASCII printable characters
+	 * (i.e., code values 20h to 7Eh) and may be terminated with one or
+	 * more ASCII null (00h) characters.
+	 */
+	for (i = 0; i < len; i++) {
+		if (buf[i] < 0x20 || buf[i] > 0x7E) {
+			pr_err("Emulated T10 Inquiry Data contains non-ASCII-printable characters\n");
+			return -EINVAL;
+		}
+	}
+
+	return len;
 }
 
 /*
@@ -1249,7 +1326,7 @@ static ssize_t target_wwn_vendor_id_store(struct config_item *item,
 	unsigned char buf[INQUIRY_VENDOR_LEN + 2];
 	char *stripped = NULL;
 	size_t len;
-	int i;
+	ssize_t ret;
 
 	len = strlcpy(buf, page, sizeof(buf));
 	if (len < sizeof(buf)) {
@@ -1264,19 +1341,10 @@ static ssize_t target_wwn_vendor_id_store(struct config_item *item,
 		return -EOVERFLOW;
 	}
 
-	/*
-	 * SPC 4.3.1:
-	 * ASCII data fields shall contain only ASCII printable characters (i.e.,
-	 * code values 20h to 7Eh) and may be terminated with one or more ASCII
-	 * null (00h) characters.
-	 */
-	for (i = 0; i < len; i++) {
-		if ((stripped[i] < 0x20) || (stripped[i] > 0x7E)) {
-			pr_err("Emulated T10 Vendor Identification contains"
-				" non-ASCII-printable characters\n");
-			return -EINVAL;
-		}
-	}
+	ret = target_check_inquiry_data(stripped);
+
+	if (ret < 0)
+		return ret;
 
 	/*
 	 * Check to see if any active exports exist.  If they do exist, fail
@@ -1299,6 +1367,118 @@ static ssize_t target_wwn_vendor_id_store(struct config_item *item,
 	return count;
 }
 
+static ssize_t target_wwn_product_id_show(struct config_item *item,
+		char *page)
+{
+	return sprintf(page, "%s\n", &to_t10_wwn(item)->model[0]);
+}
+
+static ssize_t target_wwn_product_id_store(struct config_item *item,
+		const char *page, size_t count)
+{
+	struct t10_wwn *t10_wwn = to_t10_wwn(item);
+	struct se_device *dev = t10_wwn->t10_dev;
+	/* +2 to allow for a trailing (stripped) '\n' and null-terminator */
+	unsigned char buf[INQUIRY_MODEL_LEN + 2];
+	char *stripped = NULL;
+	size_t len;
+	ssize_t ret;
+
+	len = strlcpy(buf, page, sizeof(buf));
+	if (len < sizeof(buf)) {
+		/* Strip any newline added from userspace. */
+		stripped = strstrip(buf);
+		len = strlen(stripped);
+	}
+	if (len > INQUIRY_MODEL_LEN) {
+		pr_err("Emulated T10 Vendor exceeds INQUIRY_MODEL_LEN: "
+			 __stringify(INQUIRY_MODEL_LEN)
+			"\n");
+		return -EOVERFLOW;
+	}
+
+	ret = target_check_inquiry_data(stripped);
+
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * Check to see if any active exports exist.  If they do exist, fail
+	 * here as changing this information on the fly (underneath the
+	 * initiator side OS dependent multipath code) could cause negative
+	 * effects.
+	 */
+	if (dev->export_count) {
+		pr_err("Unable to set T10 Model while active %d exports exist\n",
+			dev->export_count);
+		return -EINVAL;
+	}
+
+	BUILD_BUG_ON(sizeof(dev->t10_wwn.model) != INQUIRY_MODEL_LEN + 1);
+	strlcpy(dev->t10_wwn.model, stripped, sizeof(dev->t10_wwn.model));
+
+	pr_debug("Target_Core_ConfigFS: Set emulated T10 Model Identification: %s\n",
+		 dev->t10_wwn.model);
+
+	return count;
+}
+
+static ssize_t target_wwn_revision_show(struct config_item *item,
+		char *page)
+{
+	return sprintf(page, "%s\n", &to_t10_wwn(item)->revision[0]);
+}
+
+static ssize_t target_wwn_revision_store(struct config_item *item,
+		const char *page, size_t count)
+{
+	struct t10_wwn *t10_wwn = to_t10_wwn(item);
+	struct se_device *dev = t10_wwn->t10_dev;
+	/* +2 to allow for a trailing (stripped) '\n' and null-terminator */
+	unsigned char buf[INQUIRY_REVISION_LEN + 2];
+	char *stripped = NULL;
+	size_t len;
+	ssize_t ret;
+
+	len = strlcpy(buf, page, sizeof(buf));
+	if (len < sizeof(buf)) {
+		/* Strip any newline added from userspace. */
+		stripped = strstrip(buf);
+		len = strlen(stripped);
+	}
+	if (len > INQUIRY_REVISION_LEN) {
+		pr_err("Emulated T10 Revision exceeds INQUIRY_REVISION_LEN: "
+			 __stringify(INQUIRY_REVISION_LEN)
+			"\n");
+		return -EOVERFLOW;
+	}
+
+	ret = target_check_inquiry_data(stripped);
+
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * Check to see if any active exports exist.  If they do exist, fail
+	 * here as changing this information on the fly (underneath the
+	 * initiator side OS dependent multipath code) could cause negative
+	 * effects.
+	 */
+	if (dev->export_count) {
+		pr_err("Unable to set T10 Revision while active %d exports exist\n",
+			dev->export_count);
+		return -EINVAL;
+	}
+
+	BUILD_BUG_ON(sizeof(dev->t10_wwn.revision) != INQUIRY_REVISION_LEN + 1);
+	strlcpy(dev->t10_wwn.revision, stripped, sizeof(dev->t10_wwn.revision));
+
+	pr_debug("Target_Core_ConfigFS: Set emulated T10 Revision: %s\n",
+		 dev->t10_wwn.revision);
+
+	return count;
+}
+
 /*
  * VPD page 0x80 Unit serial
  */
@@ -1314,7 +1494,7 @@ static ssize_t target_wwn_vpd_unit_serial_store(struct config_item *item,
 {
 	struct t10_wwn *t10_wwn = to_t10_wwn(item);
 	struct se_device *dev = t10_wwn->t10_dev;
-	unsigned char buf[INQUIRY_VPD_SERIAL_LEN];
+	unsigned char buf[INQUIRY_VPD_SERIAL_LEN] = { };
 
 	/*
 	 * If Linux/SCSI subsystem_api_t plugin got a VPD Unit Serial
@@ -1356,7 +1536,6 @@ static ssize_t target_wwn_vpd_unit_serial_store(struct config_item *item,
 	 * Also, strip any newline added from the userspace
 	 * echo $UUID > $TARGET/$HBA/$STORAGE_OBJECT/wwn/vpd_unit_serial
 	 */
-	memset(buf, 0, INQUIRY_VPD_SERIAL_LEN);
 	snprintf(buf, INQUIRY_VPD_SERIAL_LEN, "%s", page);
 	snprintf(dev->t10_wwn.unit_serial, INQUIRY_VPD_SERIAL_LEN,
 			"%s", strstrip(buf));
@@ -1376,10 +1555,8 @@ static ssize_t target_wwn_vpd_protocol_identifier_show(struct config_item *item,
 {
 	struct t10_wwn *t10_wwn = to_t10_wwn(item);
 	struct t10_vpd *vpd;
-	unsigned char buf[VPD_TMP_BUF_SIZE];
+	unsigned char buf[VPD_TMP_BUF_SIZE] = { };
 	ssize_t len = 0;
-
-	memset(buf, 0, VPD_TMP_BUF_SIZE);
 
 	spin_lock(&t10_wwn->t10_vpd_lock);
 	list_for_each_entry(vpd, &t10_wwn->t10_vpd_list, vpd_list) {
@@ -1446,6 +1623,8 @@ DEF_DEV_WWN_ASSOC_SHOW(vpd_assoc_target_port, 0x10);
 DEF_DEV_WWN_ASSOC_SHOW(vpd_assoc_scsi_target_device, 0x20);
 
 CONFIGFS_ATTR(target_wwn_, vendor_id);
+CONFIGFS_ATTR(target_wwn_, product_id);
+CONFIGFS_ATTR(target_wwn_, revision);
 CONFIGFS_ATTR(target_wwn_, vpd_unit_serial);
 CONFIGFS_ATTR_RO(target_wwn_, vpd_protocol_identifier);
 CONFIGFS_ATTR_RO(target_wwn_, vpd_assoc_logical_unit);
@@ -1454,6 +1633,8 @@ CONFIGFS_ATTR_RO(target_wwn_, vpd_assoc_scsi_target_device);
 
 static struct configfs_attribute *target_core_dev_wwn_attrs[] = {
 	&target_wwn_attr_vendor_id,
+	&target_wwn_attr_product_id,
+	&target_wwn_attr_revision,
 	&target_wwn_attr_vpd_unit_serial,
 	&target_wwn_attr_vpd_protocol_identifier,
 	&target_wwn_attr_vpd_assoc_logical_unit,
@@ -1479,9 +1660,7 @@ static ssize_t target_core_dev_pr_show_spc3_res(struct se_device *dev,
 {
 	struct se_node_acl *se_nacl;
 	struct t10_pr_registration *pr_reg;
-	char i_buf[PR_REG_ISID_ID_LEN];
-
-	memset(i_buf, 0, PR_REG_ISID_ID_LEN);
+	char i_buf[PR_REG_ISID_ID_LEN] = { };
 
 	pr_reg = dev->dev_pr_res_holder;
 	if (!pr_reg)
@@ -1498,11 +1677,12 @@ static ssize_t target_core_dev_pr_show_spc3_res(struct se_device *dev,
 static ssize_t target_core_dev_pr_show_spc2_res(struct se_device *dev,
 		char *page)
 {
+	struct se_session *sess = dev->reservation_holder;
 	struct se_node_acl *se_nacl;
 	ssize_t len;
 
-	se_nacl = dev->dev_reserved_node_acl;
-	if (se_nacl) {
+	if (sess) {
+		se_nacl = sess->se_node_acl;
 		len = sprintf(page,
 			      "SPC-2 Reservation: %s Initiator: %s\n",
 			      se_nacl->se_tpg->se_tpg_tfo->fabric_name,
@@ -1521,7 +1701,7 @@ static ssize_t target_pr_res_holder_show(struct config_item *item, char *page)
 	if (!dev->dev_attrib.emulate_pr)
 		return sprintf(page, "SPC_RESERVATIONS_DISABLED\n");
 
-	if (dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR)
+	if (dev->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR)
 		return sprintf(page, "Passthrough\n");
 
 	spin_lock(&dev->dev_reservation_lock);
@@ -1663,7 +1843,7 @@ static ssize_t target_pr_res_type_show(struct config_item *item, char *page)
 
 	if (!dev->dev_attrib.emulate_pr)
 		return sprintf(page, "SPC_RESERVATIONS_DISABLED\n");
-	if (dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR)
+	if (dev->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR)
 		return sprintf(page, "SPC_PASSTHROUGH\n");
 	if (dev->dev_reservation_flags & DRF_SPC2_RESERVATIONS)
 		return sprintf(page, "SPC2_RESERVATIONS\n");
@@ -1677,7 +1857,7 @@ static ssize_t target_pr_res_aptpl_active_show(struct config_item *item,
 	struct se_device *dev = pr_to_dev(item);
 
 	if (!dev->dev_attrib.emulate_pr ||
-	    (dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR))
+	    (dev->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR))
 		return 0;
 
 	return sprintf(page, "APTPL Bit Status: %s\n",
@@ -1690,7 +1870,7 @@ static ssize_t target_pr_res_aptpl_metadata_show(struct config_item *item,
 	struct se_device *dev = pr_to_dev(item);
 
 	if (!dev->dev_attrib.emulate_pr ||
-	    (dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR))
+	    (dev->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR))
 		return 0;
 
 	return sprintf(page, "Ready to process PR APTPL metadata..\n");
@@ -1737,7 +1917,7 @@ static ssize_t target_pr_res_aptpl_metadata_store(struct config_item *item,
 	u8 type = 0;
 
 	if (!dev->dev_attrib.emulate_pr ||
-	    (dev->transport->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR))
+	    (dev->transport_flags & TRANSPORT_FLAG_PASSTHROUGH_PGR))
 		return count;
 	if (dev->dev_reservation_flags & DRF_SPC2_RESERVATIONS)
 		return count;
@@ -2101,7 +2281,7 @@ static ssize_t target_dev_alua_lu_gp_store(struct config_item *item,
 	struct se_hba *hba = dev->se_hba;
 	struct t10_alua_lu_gp *lu_gp = NULL, *lu_gp_new = NULL;
 	struct t10_alua_lu_gp_member *lu_gp_mem;
-	unsigned char buf[LU_GROUP_NAME_BUF];
+	unsigned char buf[LU_GROUP_NAME_BUF] = { };
 	int move = 0;
 
 	lu_gp_mem = dev->dev_alua_lu_gp_mem;
@@ -2112,7 +2292,6 @@ static ssize_t target_dev_alua_lu_gp_store(struct config_item *item,
 		pr_err("ALUA LU Group Alias too large!\n");
 		return -EINVAL;
 	}
-	memset(buf, 0, LU_GROUP_NAME_BUF);
 	memcpy(buf, page, count);
 	/*
 	 * Any ALUA logical unit alias besides "NULL" means we will be
@@ -2430,9 +2609,7 @@ static ssize_t target_lu_gp_members_show(struct config_item *item, char *page)
 	struct se_hba *hba;
 	struct t10_alua_lu_gp_member *lu_gp_mem;
 	ssize_t len = 0, cur_len;
-	unsigned char buf[LU_GROUP_NAME_BUF];
-
-	memset(buf, 0, LU_GROUP_NAME_BUF);
+	unsigned char buf[LU_GROUP_NAME_BUF] = { };
 
 	spin_lock(&lu_gp->lu_gp_lock);
 	list_for_each_entry(lu_gp_mem, &lu_gp->lu_gp_mem_list, lu_gp_mem_list) {
@@ -2568,8 +2745,7 @@ static ssize_t target_tg_pt_gp_alua_access_state_store(struct config_item *item,
 	int new_state, ret;
 
 	if (!tg_pt_gp->tg_pt_gp_valid_id) {
-		pr_err("Unable to do implicit ALUA on non valid"
-			" tg_pt_gp ID: %hu\n", tg_pt_gp->tg_pt_gp_valid_id);
+		pr_err("Unable to do implicit ALUA on invalid tg_pt_gp ID\n");
 		return -EINVAL;
 	}
 	if (!target_dev_configured(dev)) {
@@ -2620,9 +2796,7 @@ static ssize_t target_tg_pt_gp_alua_access_status_store(
 	int new_status, ret;
 
 	if (!tg_pt_gp->tg_pt_gp_valid_id) {
-		pr_err("Unable to do set ALUA access status on non"
-			" valid tg_pt_gp ID: %hu\n",
-			tg_pt_gp->tg_pt_gp_valid_id);
+		pr_err("Unable to set ALUA access status on invalid tg_pt_gp ID\n");
 		return -EINVAL;
 	}
 
@@ -2675,9 +2849,7 @@ static ssize_t target_tg_pt_gp_alua_support_##_name##_store(		\
 	int ret;							\
 									\
 	if (!t->tg_pt_gp_valid_id) {					\
-		pr_err("Unable to do set " #_name " ALUA state on non"	\
-		       " valid tg_pt_gp ID: %hu\n",			\
-		       t->tg_pt_gp_valid_id);				\
+		pr_err("Unable to set " #_name " ALUA state on invalid tg_pt_gp ID\n"); \
 		return -EINVAL;						\
 	}								\
 									\
@@ -2835,9 +3007,7 @@ static ssize_t target_tg_pt_gp_members_show(struct config_item *item,
 	struct t10_alua_tg_pt_gp *tg_pt_gp = to_tg_pt_gp(item);
 	struct se_lun *lun;
 	ssize_t len = 0, cur_len;
-	unsigned char buf[TG_PT_GROUP_NAME_BUF];
-
-	memset(buf, 0, TG_PT_GROUP_NAME_BUF);
+	unsigned char buf[TG_PT_GROUP_NAME_BUF] = { };
 
 	spin_lock(&tg_pt_gp->tg_pt_gp_lock);
 	list_for_each_entry(lun, &tg_pt_gp->tg_pt_gp_lun_list,
@@ -3224,11 +3394,10 @@ static struct config_group *target_core_call_addhbatotarget(
 {
 	char *se_plugin_str, *str, *str2;
 	struct se_hba *hba;
-	char buf[TARGET_CORE_NAME_MAX_LEN];
+	char buf[TARGET_CORE_NAME_MAX_LEN] = { };
 	unsigned long plugin_dep_id = 0;
 	int ret;
 
-	memset(buf, 0, TARGET_CORE_NAME_MAX_LEN);
 	if (strlen(name) >= TARGET_CORE_NAME_MAX_LEN) {
 		pr_err("Passed *name strlen(): %d exceeds"
 			" TARGET_CORE_NAME_MAX_LEN: %d\n", (int)strlen(name),

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ispccdc.c
  *
@@ -8,10 +9,6 @@
  *
  * Contacts: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
  *	     Sakari Ailus <sakari.ailus@iki.fi>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -302,11 +299,10 @@ static int ccdc_lsc_busy(struct isp_ccdc_device *ccdc)
 			     ISPCCDC_LSC_BUSY;
 }
 
-/* __ccdc_lsc_configure - Apply a new configuration to the LSC engine
+/*
+ * __ccdc_lsc_configure - Apply a new configuration to the LSC engine
  * @ccdc: Pointer to ISP CCDC device
  * @req: New configuration request
- *
- * context: in_interrupt()
  */
 static int __ccdc_lsc_configure(struct isp_ccdc_device *ccdc,
 				struct ispccdc_lsc_config_req *req)
@@ -1315,6 +1311,10 @@ static void __ccdc_enable(struct isp_ccdc_device *ccdc, int enable)
 {
 	struct isp_device *isp = to_isp_device(ccdc);
 
+	/* Avoid restarting the CCDC when streaming is stopping. */
+	if (enable && ccdc->stopping & CCDC_STOP_REQUEST)
+		return;
+
 	isp_reg_clr_set(isp, OMAP3_ISP_IOMEM_CCDC, ISPCCDC_PCR,
 			ISPCCDC_PCR_EN, enable ? ISPCCDC_PCR_EN : 0);
 
@@ -1594,7 +1594,7 @@ static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 		return 0;
 
 	/* We're in continuous mode, and memory writes were disabled due to a
-	 * buffer underrun. Reenable them now that we have a buffer. The buffer
+	 * buffer underrun. Re-enable them now that we have a buffer. The buffer
 	 * address has been set in ccdc_video_queue.
 	 */
 	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS && ccdc->underrun) {
@@ -1609,6 +1609,11 @@ static int ccdc_isr_buffer(struct isp_ccdc_device *ccdc)
 		omap3isp_pipeline_cancel_stream(pipe);
 		return 0;
 	}
+
+	/* Don't restart CCDC if we're just about to stop streaming. */
+	if (ccdc->state == ISP_PIPELINE_STREAM_CONTINUOUS &&
+	    ccdc->stopping & CCDC_STOP_REQUEST)
+		return 0;
 
 	if (!ccdc_has_all_fields(ccdc))
 		return 1;
@@ -1664,15 +1669,14 @@ static void ccdc_vd0_isr(struct isp_ccdc_device *ccdc)
 		spin_unlock_irqrestore(&ccdc->lock, flags);
 	}
 
-	if (ccdc->output & CCDC_OUTPUT_MEMORY)
-		restart = ccdc_isr_buffer(ccdc);
-
 	spin_lock_irqsave(&ccdc->lock, flags);
-
 	if (ccdc_handle_stopping(ccdc, CCDC_EVENT_VD0)) {
 		spin_unlock_irqrestore(&ccdc->lock, flags);
 		return;
 	}
+
+	if (ccdc->output & CCDC_OUTPUT_MEMORY)
+		restart = ccdc_isr_buffer(ccdc);
 
 	if (!ccdc->shadow_update)
 		ccdc_apply_controls(ccdc);
@@ -1712,7 +1716,7 @@ static void ccdc_vd1_isr(struct isp_ccdc_device *ccdc)
 	 * data to memory the CCDC and LSC are stopped immediately but
 	 * without change the CCDC stopping state machine. The CCDC
 	 * stopping state machine should be used only when user request
-	 * for stopping is received (SINGLESHOT is an exeption).
+	 * for stopping is received (SINGLESHOT is an exception).
 	 */
 	switch (ccdc->state) {
 	case ISP_PIPELINE_STREAM_SINGLESHOT:
@@ -2605,6 +2609,7 @@ int omap3isp_ccdc_register_entities(struct isp_ccdc_device *ccdc,
 	int ret;
 
 	/* Register the subdev and video node. */
+	ccdc->subdev.dev = vdev->mdev->dev;
 	ret = v4l2_device_register_subdev(vdev, &ccdc->subdev);
 	if (ret < 0)
 		goto error;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Samsung S5K5BAF UXGA 1/5" 2M CMOS Image Sensor
  * with embedded SoC ISP.
@@ -7,10 +8,6 @@
  *
  * Based on S5K6AA driver authored by Sylwester Nawrocki
  * Copyright (C) 2013, Samsung Electronics Co., Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -283,8 +280,7 @@ struct s5k5baf_fw {
 	struct {
 		u16 id;
 		u16 offset;
-	} seq[0];
-	u16 data[0];
+	} seq[];
 };
 
 struct s5k5baf {
@@ -514,7 +510,7 @@ static void s5k5baf_write_arr_seq(struct s5k5baf *state, u16 addr,
 
 #define s5k5baf_write_seq(state, addr, seq...) \
 	s5k5baf_write_arr_seq(state, addr, sizeof((char[]){ seq }), \
-			      (const u16 []){ seq });
+			      (const u16 []){ seq })
 
 /* add items count at the beginning of the list */
 #define NSEQ(seq...) sizeof((char[]){ seq }), seq
@@ -566,7 +562,7 @@ static u16 *s5k5baf_fw_get_seq(struct s5k5baf *state, u16 seq_id)
 	if (fw == NULL)
 		return NULL;
 
-	data = fw->data + 2 * fw->count;
+	data = &fw->seq[0].id + 2 * fw->count;
 
 	for (i = 0; i < fw->count; ++i) {
 		if (fw->seq[i].id == seq_id)
@@ -1949,8 +1945,7 @@ static int s5k5baf_configure_regulators(struct s5k5baf *state)
 	return ret;
 }
 
-static int s5k5baf_probe(struct i2c_client *c,
-			const struct i2c_device_id *id)
+static int s5k5baf_probe(struct i2c_client *c)
 {
 	struct s5k5baf *state;
 	int ret;
@@ -2049,7 +2044,7 @@ static struct i2c_driver s5k5baf_i2c_driver = {
 		.of_match_table = s5k5baf_of_match,
 		.name = S5K5BAF_DRIVER_NAME
 	},
-	.probe		= s5k5baf_probe,
+	.probe_new	= s5k5baf_probe,
 	.remove		= s5k5baf_remove,
 	.id_table	= s5k5baf_id,
 };

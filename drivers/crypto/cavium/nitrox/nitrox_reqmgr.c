@@ -3,6 +3,7 @@
 #include <linux/workqueue.h>
 #include <crypto/internal/skcipher.h>
 
+#include "nitrox_common.h"
 #include "nitrox_dev.h"
 #include "nitrox_req.h"
 #include "nitrox_csr.h"
@@ -57,14 +58,15 @@ static void softreq_unmap_sgbufs(struct nitrox_softreq *sr)
 	struct device *dev = DEV(ndev);
 
 
-	dma_unmap_sg(dev, sr->in.sg, sr->in.sgmap_cnt, DMA_BIDIRECTIONAL);
+	dma_unmap_sg(dev, sr->in.sg, sg_nents(sr->in.sg),
+		     DMA_BIDIRECTIONAL);
 	dma_unmap_single(dev, sr->in.sgcomp_dma, sr->in.sgcomp_len,
 			 DMA_TO_DEVICE);
 	kfree(sr->in.sgcomp);
 	sr->in.sg = NULL;
 	sr->in.sgmap_cnt = 0;
 
-	dma_unmap_sg(dev, sr->out.sg, sr->out.sgmap_cnt,
+	dma_unmap_sg(dev, sr->out.sg, sg_nents(sr->out.sg),
 		     DMA_BIDIRECTIONAL);
 	dma_unmap_single(dev, sr->out.sgcomp_dma, sr->out.sgcomp_len,
 			 DMA_TO_DEVICE);
@@ -177,7 +179,7 @@ static int dma_map_inbufs(struct nitrox_softreq *sr,
 	return 0;
 
 incomp_err:
-	dma_unmap_sg(dev, req->src, nents, DMA_BIDIRECTIONAL);
+	dma_unmap_sg(dev, req->src, sg_nents(req->src), DMA_BIDIRECTIONAL);
 	sr->in.sgmap_cnt = 0;
 	return ret;
 }
@@ -202,7 +204,7 @@ static int dma_map_outbufs(struct nitrox_softreq *sr,
 	return 0;
 
 outcomp_map_err:
-	dma_unmap_sg(dev, req->dst, nents, DMA_BIDIRECTIONAL);
+	dma_unmap_sg(dev, req->dst, sg_nents(req->dst), DMA_BIDIRECTIONAL);
 	sr->out.sgmap_cnt = 0;
 	sr->out.sg = NULL;
 	return ret;
@@ -303,8 +305,6 @@ static void post_se_instr(struct nitrox_softreq *sr,
 
 	/* Ring doorbell with count 1 */
 	writeq(1, cmdq->dbell_csr_addr);
-	/* orders the doorbell rings */
-	mmiowb();
 
 	cmdq->write_idx = incr_index(idx, 1, ndev->qlen);
 
@@ -450,7 +450,7 @@ int nitrox_process_se_request(struct nitrox_device *ndev,
 	sr->instr.ih.s.ssz = sr->out.sgmap_cnt;
 	sr->instr.ih.s.fsz = FDATA_SIZE + sizeof(struct gphdr);
 	sr->instr.ih.s.tlen = sr->instr.ih.s.fsz + sr->in.total_bytes;
-	sr->instr.ih.value = cpu_to_be64(sr->instr.ih.value);
+	sr->instr.ih.bev = cpu_to_be64(sr->instr.ih.value);
 
 	/* word 2 */
 	sr->instr.irh.value[0] = 0;
@@ -462,7 +462,7 @@ int nitrox_process_se_request(struct nitrox_device *ndev,
 	sr->instr.irh.s.ctxc = req->ctrl.s.ctxc;
 	sr->instr.irh.s.arg = req->ctrl.s.arg;
 	sr->instr.irh.s.opcode = req->opcode;
-	sr->instr.irh.value[0] = cpu_to_be64(sr->instr.irh.value[0]);
+	sr->instr.irh.bev[0] = cpu_to_be64(sr->instr.irh.value[0]);
 
 	/* word 3 */
 	sr->instr.irh.s.ctxp = cpu_to_be64(ctx_handle);
@@ -470,7 +470,7 @@ int nitrox_process_se_request(struct nitrox_device *ndev,
 	/* word 4 */
 	sr->instr.slc.value[0] = 0;
 	sr->instr.slc.s.ssz = sr->out.sgmap_cnt;
-	sr->instr.slc.value[0] = cpu_to_be64(sr->instr.slc.value[0]);
+	sr->instr.slc.bev[0] = cpu_to_be64(sr->instr.slc.value[0]);
 
 	/* word 5 */
 	sr->instr.slc.s.rptr = cpu_to_be64(sr->out.sgcomp_dma);
@@ -599,8 +599,6 @@ void pkt_slc_resp_tasklet(unsigned long data)
 	 * MSI-X interrupt generates if Completion count > Threshold
 	 */
 	writeq(slc_cnts.value, cmdq->compl_cnt_csr_addr);
-	/* order the writes */
-	mmiowb();
 
 	if (atomic_read(&cmdq->backlog_count))
 		schedule_work(&cmdq->backlog_qflush);

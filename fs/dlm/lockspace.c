@@ -1,12 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
 *******************************************************************************
 **
 **  Copyright (C) Sistina Software, Inc.  1997-2003  All rights reserved.
 **  Copyright (C) 2004-2011 Red Hat, Inc.  All rights reserved.
 **
-**  This copyrighted material is made available to anyone wishing to use,
-**  modify, copy, or redistribute it subject to the terms and conditions
-**  of the GNU General Public License v.2.
 **
 *******************************************************************************
 ******************************************************************************/
@@ -160,6 +158,7 @@ static struct attribute *dlm_attrs[] = {
 	&dlm_attr_recover_nodeid.attr,
 	NULL,
 };
+ATTRIBUTE_GROUPS(dlm);
 
 static ssize_t dlm_attr_show(struct kobject *kobj, struct attribute *attr,
 			     char *buf)
@@ -189,7 +188,7 @@ static const struct sysfs_ops dlm_attr_ops = {
 };
 
 static struct kobj_type dlm_ktype = {
-	.default_attrs = dlm_attrs,
+	.default_groups = dlm_groups,
 	.sysfs_ops     = &dlm_attr_ops,
 	.release       = lockspace_kobj_release,
 };
@@ -198,8 +197,6 @@ static struct kset *dlm_kset;
 
 static int do_uevent(struct dlm_ls *ls, int in)
 {
-	int error;
-
 	if (in)
 		kobject_uevent(&ls->ls_kobj, KOBJ_ONLINE);
 	else
@@ -210,20 +207,12 @@ static int do_uevent(struct dlm_ls *ls, int in)
 	/* dlm_controld will see the uevent, do the necessary group management
 	   and then write to sysfs to wake us */
 
-	error = wait_event_interruptible(ls->ls_uevent_wait,
-			test_and_clear_bit(LSFL_UEVENT_WAIT, &ls->ls_flags));
+	wait_event(ls->ls_uevent_wait,
+		   test_and_clear_bit(LSFL_UEVENT_WAIT, &ls->ls_flags));
 
-	log_rinfo(ls, "group event done %d %d", error, ls->ls_uevent_result);
+	log_rinfo(ls, "group event done %d", ls->ls_uevent_result);
 
-	if (error)
-		goto out;
-
-	error = ls->ls_uevent_result;
- out:
-	if (error)
-		log_error(ls, "group %s failed %d %d", in ? "join" : "leave",
-			  error, ls->ls_uevent_result);
-	return error;
+	return ls->ls_uevent_result;
 }
 
 static int dlm_uevent(struct kset *kset, struct kobject *kobj,
@@ -415,12 +404,6 @@ static int threads_start(void)
 	return error;
 }
 
-static void threads_stop(void)
-{
-	dlm_scand_stop();
-	dlm_lowcomms_stop();
-}
-
 static int new_lockspace(const char *name, const char *cluster,
 			 uint32_t flags, int lvblen,
 			 const struct dlm_lockspace_ops *ops, void *ops_arg,
@@ -583,7 +566,7 @@ static int new_lockspace(const char *name, const char *cluster,
 	mutex_init(&ls->ls_requestqueue_mutex);
 	mutex_init(&ls->ls_clear_proc_locks);
 
-	ls->ls_recover_buf = kmalloc(dlm_config.ci_buffer_size, GFP_NOFS);
+	ls->ls_recover_buf = kmalloc(LOWCOMMS_MAX_TX_BUFFER_LEN, GFP_NOFS);
 	if (!ls->ls_recover_buf)
 		goto out_lkbidr;
 
@@ -633,15 +616,15 @@ static int new_lockspace(const char *name, const char *cluster,
 	wait_event(ls->ls_recover_lock_wait,
 		   test_bit(LSFL_RECOVER_LOCK, &ls->ls_flags));
 
+	/* let kobject handle freeing of ls if there's an error */
+	do_unreg = 1;
+
 	ls->ls_kobj.kset = dlm_kset;
 	error = kobject_init_and_add(&ls->ls_kobj, &dlm_ktype, NULL,
 				     "%s", ls->ls_name);
 	if (error)
 		goto out_recoverd;
 	kobject_uevent(&ls->ls_kobj, KOBJ_ADD);
-
-	/* let kobject handle freeing of ls if there's an error */
-	do_unreg = 1;
 
 	/* This uevent triggers dlm_controld in userspace to add us to the
 	   group of nodes that are members of this lockspace (managed by the
@@ -713,8 +696,11 @@ int dlm_new_lockspace(const char *name, const char *cluster,
 		ls_count++;
 	if (error > 0)
 		error = 0;
-	if (!ls_count)
-		threads_stop();
+	if (!ls_count) {
+		dlm_scand_stop();
+		dlm_lowcomms_shutdown();
+		dlm_lowcomms_stop();
+	}
  out:
 	mutex_unlock(&ls_lock);
 	return error;
@@ -798,6 +784,11 @@ static int release_lockspace(struct dlm_ls *ls, int force)
 		do_uevent(ls, 0);
 
 	dlm_recoverd_stop(ls);
+
+	if (ls_count == 1) {
+		dlm_scand_stop();
+		dlm_lowcomms_shutdown();
+	}
 
 	dlm_callback_stop(ls);
 
@@ -891,7 +882,7 @@ int dlm_release_lockspace(void *lockspace, int force)
 	if (!error)
 		ls_count--;
 	if (!ls_count)
-		threads_stop();
+		dlm_lowcomms_stop();
 	mutex_unlock(&ls_lock);
 
 	return error;

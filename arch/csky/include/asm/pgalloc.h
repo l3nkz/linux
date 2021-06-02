@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-// Copyright (C) 2018 Hangzhou C-SKY Microsystems co.,ltd.
 
 #ifndef __ASM_CSKY_PGALLOC_H
 #define __ASM_CSKY_PGALLOC_H
@@ -7,6 +6,9 @@
 #include <linux/highmem.h>
 #include <linux/mm.h>
 #include <linux/sched.h>
+
+#define __HAVE_ARCH_PTE_ALLOC_ONE_KERNEL
+#include <asm-generic/pgalloc.h>
 
 static inline void pmd_populate_kernel(struct mm_struct *mm, pmd_t *pmd,
 					pte_t *pte)
@@ -39,38 +41,6 @@ static inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
 	return pte;
 }
 
-static inline struct page *pte_alloc_one(struct mm_struct *mm)
-{
-	struct page *pte;
-
-	pte = alloc_pages(GFP_KERNEL | __GFP_ZERO, 0);
-	if (!pte)
-		return NULL;
-
-	if (!pgtable_page_ctor(pte)) {
-		__free_page(pte);
-		return NULL;
-	}
-
-	return pte;
-}
-
-static inline void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
-{
-	free_pages((unsigned long)pte, PTE_ORDER);
-}
-
-static inline void pte_free(struct mm_struct *mm, pgtable_t pte)
-{
-	pgtable_page_dtor(pte);
-	__free_pages(pte, PTE_ORDER);
-}
-
-static inline void pgd_free(struct mm_struct *mm, pgd_t *pgd)
-{
-	free_pages((unsigned long)pgd, PGD_ORDER);
-}
-
 static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	pgd_t *ret;
@@ -95,14 +65,12 @@ static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 
 #define __pte_free_tlb(tlb, pte, address)		\
 do {							\
-	pgtable_page_dtor(pte);				\
+	pgtable_pte_page_dtor(pte);			\
 	tlb_remove_page(tlb, pte);			\
 } while (0)
 
-#define check_pgt_cache()	do {} while (0)
-
 extern void pagetable_init(void);
-extern void pre_mmu_init(void);
+extern void mmu_init(unsigned long min_pfn, unsigned long max_pfn);
 extern void pre_trap_init(void);
 
 #endif /* __ASM_CSKY_PGALLOC_H */

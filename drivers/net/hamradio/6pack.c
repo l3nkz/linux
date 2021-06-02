@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 6pack.c	This module implements the 6pack protocol for kernel-based
  *		devices like TTY. It interfaces between a raw TTY and the
@@ -164,11 +165,6 @@ static void sp_encaps(struct sixpack *sp, unsigned char *icp, int len)
 {
 	unsigned char *msg, *p = icp;
 	int actual, count;
-
-	if (len > sp->mtu) {	/* sp->mtu = AX25_MTU = max. PACLEN = 256 */
-		msg = "oversized transmit packet!";
-		goto out_drop;
-	}
 
 	if (len > sp->mtu) {	/* sp->mtu = AX25_MTU = max. PACLEN = 256 */
 		msg = "oversized transmit packet!";
@@ -343,10 +339,10 @@ static void sp_bump(struct sixpack *sp, char cmd)
 
 	sp->dev->stats.rx_bytes += count;
 
-	if ((skb = dev_alloc_skb(count)) == NULL)
+	if ((skb = dev_alloc_skb(count + 1)) == NULL)
 		goto out_mem;
 
-	ptr = skb_put(skb, count);
+	ptr = skb_put(skb, count + 1);
 	*ptr++ = cmd;	/* KISS command */
 
 	memcpy(ptr, sp->cooked_buf + 1, count);
@@ -653,10 +649,10 @@ static void sixpack_close(struct tty_struct *tty)
 {
 	struct sixpack *sp;
 
-	write_lock_bh(&disc_data_lock);
+	write_lock_irq(&disc_data_lock);
 	sp = tty->disc_data;
 	tty->disc_data = NULL;
-	write_unlock_bh(&disc_data_lock);
+	write_unlock_irq(&disc_data_lock);
 	if (!sp)
 		return;
 
@@ -748,7 +744,6 @@ static int sixpack_ioctl(struct tty_struct *tty, struct file *file,
 
 static struct tty_ldisc_ops sp_ldisc = {
 	.owner		= THIS_MODULE,
-	.magic		= TTY_LDISC_MAGIC,
 	.name		= "6pack",
 	.open		= sixpack_open,
 	.close		= sixpack_close,

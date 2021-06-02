@@ -1,11 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	IPV6 GSO/GRO offload support
  *	Linux INET6 implementation
- *
- *	This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -17,6 +13,9 @@
 #include <net/protocol.h>
 #include <net/ipv6.h>
 #include <net/inet_common.h>
+#include <net/tcp.h>
+#include <net/udp.h>
+#include <net/gro.h>
 
 #include "ip6_offload.h"
 
@@ -181,10 +180,6 @@ static int ipv6_exthdrs_len(struct ipv6hdr *iph,
 	return len;
 }
 
-INDIRECT_CALLABLE_DECLARE(struct sk_buff *tcp6_gro_receive(struct list_head *,
-							   struct sk_buff *));
-INDIRECT_CALLABLE_DECLARE(struct sk_buff *udp6_gro_receive(struct list_head *,
-							   struct sk_buff *));
 INDIRECT_CALLABLE_SCOPE struct sk_buff *ipv6_gro_receive(struct list_head *head,
 							 struct sk_buff *skb)
 {
@@ -323,8 +318,6 @@ static struct sk_buff *ip4ip6_gro_receive(struct list_head *head,
 	return inet_gro_receive(head, skb);
 }
 
-INDIRECT_CALLABLE_DECLARE(int tcp6_gro_complete(struct sk_buff *, int));
-INDIRECT_CALLABLE_DECLARE(int udp6_gro_complete(struct sk_buff *, int));
 INDIRECT_CALLABLE_SCOPE int ipv6_gro_complete(struct sk_buff *skb, int nhoff)
 {
 	const struct net_offload *ops;
@@ -383,9 +376,36 @@ static struct packet_offload ipv6_packet_offload __read_mostly = {
 	},
 };
 
+static struct sk_buff *sit_gso_segment(struct sk_buff *skb,
+				       netdev_features_t features)
+{
+	if (!(skb_shinfo(skb)->gso_type & SKB_GSO_IPXIP4))
+		return ERR_PTR(-EINVAL);
+
+	return ipv6_gso_segment(skb, features);
+}
+
+static struct sk_buff *ip4ip6_gso_segment(struct sk_buff *skb,
+					  netdev_features_t features)
+{
+	if (!(skb_shinfo(skb)->gso_type & SKB_GSO_IPXIP6))
+		return ERR_PTR(-EINVAL);
+
+	return inet_gso_segment(skb, features);
+}
+
+static struct sk_buff *ip6ip6_gso_segment(struct sk_buff *skb,
+					  netdev_features_t features)
+{
+	if (!(skb_shinfo(skb)->gso_type & SKB_GSO_IPXIP6))
+		return ERR_PTR(-EINVAL);
+
+	return ipv6_gso_segment(skb, features);
+}
+
 static const struct net_offload sit_offload = {
 	.callbacks = {
-		.gso_segment	= ipv6_gso_segment,
+		.gso_segment	= sit_gso_segment,
 		.gro_receive    = sit_ip6ip6_gro_receive,
 		.gro_complete   = sit_gro_complete,
 	},
@@ -393,7 +413,7 @@ static const struct net_offload sit_offload = {
 
 static const struct net_offload ip4ip6_offload = {
 	.callbacks = {
-		.gso_segment	= inet_gso_segment,
+		.gso_segment	= ip4ip6_gso_segment,
 		.gro_receive    = ip4ip6_gro_receive,
 		.gro_complete   = ip4ip6_gro_complete,
 	},
@@ -401,7 +421,7 @@ static const struct net_offload ip4ip6_offload = {
 
 static const struct net_offload ip6ip6_offload = {
 	.callbacks = {
-		.gso_segment	= ipv6_gso_segment,
+		.gso_segment	= ip6ip6_gso_segment,
 		.gro_receive    = sit_ip6ip6_gro_receive,
 		.gro_complete   = ip6ip6_gro_complete,
 	},

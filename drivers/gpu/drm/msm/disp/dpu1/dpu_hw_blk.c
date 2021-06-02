@@ -1,13 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
@@ -27,6 +19,7 @@ static LIST_HEAD(dpu_hw_blk_list);
 
 /**
  * dpu_hw_blk_init - initialize hw block object
+ * @hw_blk: pointer to hw block object
  * @type: hw block type - enum dpu_hw_blk_type
  * @id: instance id of the hw block
  * @ops: Pointer to block operations
@@ -122,7 +115,6 @@ error_start:
 /**
  * dpu_hw_blk_put - put hw_blk to free pool if decremented refcount is zero
  * @hw_blk: hw block to be freed
- * @free_blk: function to be called when reference count goes to zero
  */
 void dpu_hw_blk_put(struct dpu_hw_blk *hw_blk)
 {

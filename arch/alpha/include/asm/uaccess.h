@@ -18,10 +18,9 @@
 #define USER_DS		((mm_segment_t) { -0x40000000000UL })
 
 #define get_fs()  (current_thread_info()->addr_limit)
-#define get_ds()  (KERNEL_DS)
 #define set_fs(x) (current_thread_info()->addr_limit = (x))
 
-#define segment_eq(a, b)	((a).seg == (b).seg)
+#define uaccess_kernel()	(get_fs().seg == KERNEL_DS.seg)
 
 /*
  * Is a address valid? This does a straightforward calculation rather

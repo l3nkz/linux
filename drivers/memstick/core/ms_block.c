@@ -1,15 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  ms_block.c - Sony MemoryStick (legacy) storage support
 
  *  Copyright (C) 2013 Maxim Levitsky <maximlevitsky@gmail.com>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  * Minor portions of the driver were copied from mspro_block.c which is
  * Copyright (C) 2007 Alex Dubov <oakad@yahoo.com>
- *
  */
 #define DRIVER_NAME "ms_block"
 #define pr_fmt(fmt) DRIVER_NAME ": " fmt
@@ -375,7 +371,7 @@ again:
 			serial mode), then just fall through */
 		if (msb_read_int_reg(msb, -1))
 			return 0;
-		/* fallthrough */
+		fallthrough;
 
 	case MSB_RP_RECEIVE_INT_REQ_RESULT:
 		intreg = mrq->data[0];
@@ -407,7 +403,7 @@ again:
 	case MSB_RP_RECEIVE_STATUS_REG:
 		msb->regs.status = *(struct ms_status_register *)mrq->data;
 		msb->state = MSB_RP_SEND_OOB_READ;
-		/* fallthrough */
+		fallthrough;
 
 	case MSB_RP_SEND_OOB_READ:
 		if (!msb_read_regs(msb,
@@ -422,7 +418,7 @@ again:
 		msb->regs.extra_data =
 			*(struct ms_extra_data_register *) mrq->data;
 		msb->state = MSB_RP_SEND_READ_DATA;
-		/* fallthrough */
+		fallthrough;
 
 	case MSB_RP_SEND_READ_DATA:
 		/* Skip that state if we only read the oob */
@@ -522,7 +518,7 @@ again:
 		msb->state = MSB_WB_RECEIVE_INT_REQ;
 		if (msb_read_int_reg(msb, -1))
 			return 0;
-		/* fallthrough */
+		fallthrough;
 
 	case MSB_WB_RECEIVE_INT_REQ:
 		intreg = mrq->data[0];
@@ -553,7 +549,7 @@ again:
 
 		msb->int_polling = false;
 		msb->state = MSB_WB_SEND_WRITE_DATA;
-		/* fallthrough */
+		fallthrough;
 
 	case MSB_WB_SEND_WRITE_DATA:
 		sg_init_table(sg, ARRAY_SIZE(sg));
@@ -632,7 +628,7 @@ again:
 		msb->state = MSB_SC_RECEIVE_INT_REQ;
 		if (msb_read_int_reg(msb, -1))
 			return 0;
-		/* fallthrough */
+		fallthrough;
 
 	case MSB_SC_RECEIVE_INT_REQ:
 		intreg = mrq->data[0];
@@ -1091,7 +1087,7 @@ static u16 msb_get_free_block(struct msb_data *msb, int zone)
 
 	pos %= msb->free_block_count[zone];
 
-	dbg_verbose("have %d choices for a free block, selected randomally: %d",
+	dbg_verbose("have %d choices for a free block, selected randomly: %d",
 		msb->free_block_count[zone], pos);
 
 	pba = find_next_zero_bit(msb->used_blocks_bitmap,
@@ -1227,7 +1223,7 @@ static int msb_read_boot_blocks(struct msb_data *msb)
 		}
 
 		if (be16_to_cpu(page->header.block_id) != MS_BLOCK_BOOT_ID) {
-			dbg("the pba at %d doesn' contain boot block ID", pba);
+			dbg("the pba at %d doesn't contain boot block ID", pba);
 			continue;
 		}
 

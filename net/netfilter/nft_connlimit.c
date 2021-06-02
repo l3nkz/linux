@@ -218,8 +218,13 @@ static void nft_connlimit_destroy_clone(const struct nft_ctx *ctx,
 static bool nft_connlimit_gc(struct net *net, const struct nft_expr *expr)
 {
 	struct nft_connlimit *priv = nft_expr_priv(expr);
+	bool ret;
 
-	return nf_conncount_gc_list(net, &priv->list);
+	local_bh_disable();
+	ret = nf_conncount_gc_list(net, &priv->list);
+	local_bh_enable();
+
+	return ret;
 }
 
 static struct nft_expr_type nft_connlimit_type;
@@ -275,3 +280,4 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pablo Neira Ayuso");
 MODULE_ALIAS_NFT_EXPR("connlimit");
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CONNLIMIT);
+MODULE_DESCRIPTION("nftables connlimit rule support");

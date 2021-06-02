@@ -5,6 +5,8 @@
  */
 #include <linux/bitfield.h>
 #include <linux/clk.h>
+#include <linux/dmaengine.h>
+#include <linux/dma-mapping.h>
 #include <linux/errno.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
@@ -13,6 +15,8 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/pm_runtime.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
 #include <linux/sizes.h>
@@ -26,7 +30,7 @@
 #define CR_SSHIFT		BIT(4)
 #define CR_DFM			BIT(6)
 #define CR_FSEL			BIT(7)
-#define CR_FTHRES_MASK		GENMASK(12, 8)
+#define CR_FTHRES_SHIFT		8
 #define CR_TEIE			BIT(16)
 #define CR_TCIE			BIT(17)
 #define CR_FTIE			BIT(18)
@@ -76,7 +80,6 @@
 #define QSPI_PSMAR		0x28
 #define QSPI_PIR		0x2c
 #define QSPI_LPTR		0x30
-#define LPTR_DFT_TIMEOUT	0x10
 
 #define STM32_QSPI_MAX_MMAP_SZ	SZ_256M
 #define STM32_QSPI_MAX_NORCHIP	2
@@ -84,6 +87,8 @@
 #define STM32_FIFO_TIMEOUT_US 30000
 #define STM32_BUSY_TIMEOUT_US 100000
 #define STM32_ABT_TIMEOUT_US 100000
+#define STM32_COMP_TIMEOUT_MS 1000
+#define STM32_AUTOSUSPEND_DELAY -1
 
 struct stm32_qspi_flash {
 	struct stm32_qspi *qspi;
@@ -93,6 +98,8 @@ struct stm32_qspi_flash {
 
 struct stm32_qspi {
 	struct device *dev;
+	struct spi_controller *ctrl;
+	phys_addr_t phys_base;
 	void __iomem *io_base;
 	void __iomem *mm_base;
 	resource_size_t mm_size;
@@ -101,6 +108,13 @@ struct stm32_qspi {
 	struct stm32_qspi_flash flash[STM32_QSPI_MAX_NORCHIP];
 	struct completion data_completion;
 	u32 fmode;
+
+	struct dma_chan *dma_chtx;
+	struct dma_chan *dma_chrx;
+	struct completion dma_completion;
+
+	u32 cr_reg;
+	u32 dcr_reg;
 
 	/*
 	 * to protect device configuration, could be different between
@@ -177,6 +191,77 @@ static int stm32_qspi_tx_mm(struct stm32_qspi *qspi,
 	return 0;
 }
 
+static void stm32_qspi_dma_callback(void *arg)
+{
+	struct completion *dma_completion = arg;
+
+	complete(dma_completion);
+}
+
+static int stm32_qspi_tx_dma(struct stm32_qspi *qspi,
+			     const struct spi_mem_op *op)
+{
+	struct dma_async_tx_descriptor *desc;
+	enum dma_transfer_direction dma_dir;
+	struct dma_chan *dma_ch;
+	struct sg_table sgt;
+	dma_cookie_t cookie;
+	u32 cr, t_out;
+	int err;
+
+	if (op->data.dir == SPI_MEM_DATA_IN) {
+		dma_dir = DMA_DEV_TO_MEM;
+		dma_ch = qspi->dma_chrx;
+	} else {
+		dma_dir = DMA_MEM_TO_DEV;
+		dma_ch = qspi->dma_chtx;
+	}
+
+	/*
+	 * spi_map_buf return -EINVAL if the buffer is not DMA-able
+	 * (DMA-able: in vmalloc | kmap | virt_addr_valid)
+	 */
+	err = spi_controller_dma_map_mem_op_data(qspi->ctrl, op, &sgt);
+	if (err)
+		return err;
+
+	desc = dmaengine_prep_slave_sg(dma_ch, sgt.sgl, sgt.nents,
+				       dma_dir, DMA_PREP_INTERRUPT);
+	if (!desc) {
+		err = -ENOMEM;
+		goto out_unmap;
+	}
+
+	cr = readl_relaxed(qspi->io_base + QSPI_CR);
+
+	reinit_completion(&qspi->dma_completion);
+	desc->callback = stm32_qspi_dma_callback;
+	desc->callback_param = &qspi->dma_completion;
+	cookie = dmaengine_submit(desc);
+	err = dma_submit_error(cookie);
+	if (err)
+		goto out;
+
+	dma_async_issue_pending(dma_ch);
+
+	writel_relaxed(cr | CR_DMAEN, qspi->io_base + QSPI_CR);
+
+	t_out = sgt.nents * STM32_COMP_TIMEOUT_MS;
+	if (!wait_for_completion_timeout(&qspi->dma_completion,
+					 msecs_to_jiffies(t_out)))
+		err = -ETIMEDOUT;
+
+	if (err)
+		dmaengine_terminate_all(dma_ch);
+
+out:
+	writel_relaxed(cr & ~CR_DMAEN, qspi->io_base + QSPI_CR);
+out_unmap:
+	spi_controller_dma_unmap_mem_op_data(qspi->ctrl, op, &sgt);
+
+	return err;
+}
+
 static int stm32_qspi_tx(struct stm32_qspi *qspi, const struct spi_mem_op *op)
 {
 	if (!op->data.nbytes)
@@ -184,6 +269,11 @@ static int stm32_qspi_tx(struct stm32_qspi *qspi, const struct spi_mem_op *op)
 
 	if (qspi->fmode == CCR_FMODE_MM)
 		return stm32_qspi_tx_mm(qspi, op);
+	else if (((op->data.dir == SPI_MEM_DATA_IN && qspi->dma_chrx) ||
+		 (op->data.dir == SPI_MEM_DATA_OUT && qspi->dma_chtx)) &&
+		  op->data.nbytes > 4)
+		if (!stm32_qspi_tx_dma(qspi, op))
+			return 0;
 
 	return stm32_qspi_tx_poll(qspi, op);
 }
@@ -213,8 +303,8 @@ static int stm32_qspi_wait_cmd(struct stm32_qspi *qspi,
 	cr = readl_relaxed(qspi->io_base + QSPI_CR);
 	writel_relaxed(cr | CR_TCIE | CR_TEIE, qspi->io_base + QSPI_CR);
 
-	if (!wait_for_completion_interruptible_timeout(&qspi->data_completion,
-						msecs_to_jiffies(1000))) {
+	if (!wait_for_completion_timeout(&qspi->data_completion,
+				msecs_to_jiffies(STM32_COMP_TIMEOUT_MS))) {
 		err = -ETIMEDOUT;
 	} else {
 		sr = readl_relaxed(qspi->io_base + QSPI_SR);
@@ -241,7 +331,7 @@ static int stm32_qspi_send(struct spi_mem *mem, const struct spi_mem_op *op)
 {
 	struct stm32_qspi *qspi = spi_controller_get_devdata(mem->spi->master);
 	struct stm32_qspi_flash *flash = &qspi->flash[mem->spi->chip_select];
-	u32 ccr, cr, addr_max;
+	u32 ccr, cr;
 	int timeout, err = 0;
 
 	dev_dbg(qspi->dev, "cmd:%#x mode:%d.%d.%d.%d addr:%#llx len:%#x\n",
@@ -253,18 +343,6 @@ static int stm32_qspi_send(struct spi_mem *mem, const struct spi_mem_op *op)
 	if (err)
 		goto abort;
 
-	addr_max = op->addr.val + op->data.nbytes + 1;
-
-	if (op->data.dir == SPI_MEM_DATA_IN) {
-		if (addr_max < qspi->mm_size &&
-		    op->addr.buswidth)
-			qspi->fmode = CCR_FMODE_MM;
-		else
-			qspi->fmode = CCR_FMODE_INDR;
-	} else {
-		qspi->fmode = CCR_FMODE_INDW;
-	}
-
 	cr = readl_relaxed(qspi->io_base + QSPI_CR);
 	cr &= ~CR_PRESC_MASK & ~CR_FSEL;
 	cr |= FIELD_PREP(CR_PRESC_MASK, flash->presc);
@@ -274,8 +352,6 @@ static int stm32_qspi_send(struct spi_mem *mem, const struct spi_mem_op *op)
 	if (op->data.nbytes)
 		writel_relaxed(op->data.nbytes - 1,
 			       qspi->io_base + QSPI_DLR);
-	else
-		qspi->fmode = CCR_FMODE_INDW;
 
 	ccr = qspi->fmode;
 	ccr |= FIELD_PREP(CCR_INST_MASK, op->cmd.opcode);
@@ -344,11 +420,83 @@ static int stm32_qspi_exec_op(struct spi_mem *mem, const struct spi_mem_op *op)
 	struct stm32_qspi *qspi = spi_controller_get_devdata(mem->spi->master);
 	int ret;
 
+	ret = pm_runtime_get_sync(qspi->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(qspi->dev);
+		return ret;
+	}
+
 	mutex_lock(&qspi->lock);
+	if (op->data.dir == SPI_MEM_DATA_IN && op->data.nbytes)
+		qspi->fmode = CCR_FMODE_INDR;
+	else
+		qspi->fmode = CCR_FMODE_INDW;
+
 	ret = stm32_qspi_send(mem, op);
 	mutex_unlock(&qspi->lock);
 
+	pm_runtime_mark_last_busy(qspi->dev);
+	pm_runtime_put_autosuspend(qspi->dev);
+
 	return ret;
+}
+
+static int stm32_qspi_dirmap_create(struct spi_mem_dirmap_desc *desc)
+{
+	struct stm32_qspi *qspi = spi_controller_get_devdata(desc->mem->spi->master);
+
+	if (desc->info.op_tmpl.data.dir == SPI_MEM_DATA_OUT)
+		return -EOPNOTSUPP;
+
+	/* should never happen, as mm_base == null is an error probe exit condition */
+	if (!qspi->mm_base && desc->info.op_tmpl.data.dir == SPI_MEM_DATA_IN)
+		return -EOPNOTSUPP;
+
+	if (!qspi->mm_size)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
+static ssize_t stm32_qspi_dirmap_read(struct spi_mem_dirmap_desc *desc,
+				      u64 offs, size_t len, void *buf)
+{
+	struct stm32_qspi *qspi = spi_controller_get_devdata(desc->mem->spi->master);
+	struct spi_mem_op op;
+	u32 addr_max;
+	int ret;
+
+	ret = pm_runtime_get_sync(qspi->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(qspi->dev);
+		return ret;
+	}
+
+	mutex_lock(&qspi->lock);
+	/* make a local copy of desc op_tmpl and complete dirmap rdesc
+	 * spi_mem_op template with offs, len and *buf in  order to get
+	 * all needed transfer information into struct spi_mem_op
+	 */
+	memcpy(&op, &desc->info.op_tmpl, sizeof(struct spi_mem_op));
+	dev_dbg(qspi->dev, "%s len = 0x%zx offs = 0x%llx buf = 0x%p\n", __func__, len, offs, buf);
+
+	op.data.nbytes = len;
+	op.addr.val = desc->info.offset + offs;
+	op.data.buf.in = buf;
+
+	addr_max = op.addr.val + op.data.nbytes + 1;
+	if (addr_max < qspi->mm_size && op.addr.buswidth)
+		qspi->fmode = CCR_FMODE_MM;
+	else
+		qspi->fmode = CCR_FMODE_INDR;
+
+	ret = stm32_qspi_send(desc->mem, &op);
+	mutex_unlock(&qspi->lock);
+
+	pm_runtime_mark_last_busy(qspi->dev);
+	pm_runtime_put_autosuspend(qspi->dev);
+
+	return ret ?: len;
 }
 
 static int stm32_qspi_setup(struct spi_device *spi)
@@ -356,13 +504,20 @@ static int stm32_qspi_setup(struct spi_device *spi)
 	struct spi_controller *ctrl = spi->master;
 	struct stm32_qspi *qspi = spi_controller_get_devdata(ctrl);
 	struct stm32_qspi_flash *flash;
-	u32 cr, presc;
+	u32 presc;
+	int ret;
 
 	if (ctrl->busy)
 		return -EBUSY;
 
 	if (!spi->max_speed_hz)
 		return -EINVAL;
+
+	ret = pm_runtime_get_sync(qspi->dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(qspi->dev);
+		return ret;
+	}
 
 	presc = DIV_ROUND_UP(qspi->clk_rate, spi->max_speed_hz) - 1;
 
@@ -372,15 +527,76 @@ static int stm32_qspi_setup(struct spi_device *spi)
 	flash->presc = presc;
 
 	mutex_lock(&qspi->lock);
-	writel_relaxed(LPTR_DFT_TIMEOUT, qspi->io_base + QSPI_LPTR);
-	cr = FIELD_PREP(CR_FTHRES_MASK, 3) | CR_TCEN | CR_SSHIFT | CR_EN;
-	writel_relaxed(cr, qspi->io_base + QSPI_CR);
+	qspi->cr_reg = 3 << CR_FTHRES_SHIFT | CR_SSHIFT | CR_EN;
+	writel_relaxed(qspi->cr_reg, qspi->io_base + QSPI_CR);
 
 	/* set dcr fsize to max address */
-	writel_relaxed(DCR_FSIZE_MASK, qspi->io_base + QSPI_DCR);
+	qspi->dcr_reg = DCR_FSIZE_MASK;
+	writel_relaxed(qspi->dcr_reg, qspi->io_base + QSPI_DCR);
 	mutex_unlock(&qspi->lock);
 
+	pm_runtime_mark_last_busy(qspi->dev);
+	pm_runtime_put_autosuspend(qspi->dev);
+
 	return 0;
+}
+
+static int stm32_qspi_dma_setup(struct stm32_qspi *qspi)
+{
+	struct dma_slave_config dma_cfg;
+	struct device *dev = qspi->dev;
+	int ret = 0;
+
+	memset(&dma_cfg, 0, sizeof(dma_cfg));
+
+	dma_cfg.src_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	dma_cfg.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	dma_cfg.src_addr = qspi->phys_base + QSPI_DR;
+	dma_cfg.dst_addr = qspi->phys_base + QSPI_DR;
+	dma_cfg.src_maxburst = 4;
+	dma_cfg.dst_maxburst = 4;
+
+	qspi->dma_chrx = dma_request_chan(dev, "rx");
+	if (IS_ERR(qspi->dma_chrx)) {
+		ret = PTR_ERR(qspi->dma_chrx);
+		qspi->dma_chrx = NULL;
+		if (ret == -EPROBE_DEFER)
+			goto out;
+	} else {
+		if (dmaengine_slave_config(qspi->dma_chrx, &dma_cfg)) {
+			dev_err(dev, "dma rx config failed\n");
+			dma_release_channel(qspi->dma_chrx);
+			qspi->dma_chrx = NULL;
+		}
+	}
+
+	qspi->dma_chtx = dma_request_chan(dev, "tx");
+	if (IS_ERR(qspi->dma_chtx)) {
+		ret = PTR_ERR(qspi->dma_chtx);
+		qspi->dma_chtx = NULL;
+	} else {
+		if (dmaengine_slave_config(qspi->dma_chtx, &dma_cfg)) {
+			dev_err(dev, "dma tx config failed\n");
+			dma_release_channel(qspi->dma_chtx);
+			qspi->dma_chtx = NULL;
+		}
+	}
+
+out:
+	init_completion(&qspi->dma_completion);
+
+	if (ret != -EPROBE_DEFER)
+		ret = 0;
+
+	return ret;
+}
+
+static void stm32_qspi_dma_free(struct stm32_qspi *qspi)
+{
+	if (qspi->dma_chtx)
+		dma_release_channel(qspi->dma_chtx);
+	if (qspi->dma_chrx)
+		dma_release_channel(qspi->dma_chrx);
 }
 
 /*
@@ -388,16 +604,10 @@ static int stm32_qspi_setup(struct spi_device *spi)
  * to check supported mode.
  */
 static const struct spi_controller_mem_ops stm32_qspi_mem_ops = {
-	.exec_op = stm32_qspi_exec_op,
+	.exec_op	= stm32_qspi_exec_op,
+	.dirmap_create	= stm32_qspi_dirmap_create,
+	.dirmap_read	= stm32_qspi_dirmap_read,
 };
-
-static void stm32_qspi_release(struct stm32_qspi *qspi)
-{
-	/* disable qspi */
-	writel_relaxed(0, qspi->io_base + QSPI_CR);
-	mutex_destroy(&qspi->lock);
-	clk_disable_unprepare(qspi->clk);
-}
 
 static int stm32_qspi_probe(struct platform_device *pdev)
 {
@@ -413,47 +623,69 @@ static int stm32_qspi_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	qspi = spi_controller_get_devdata(ctrl);
+	qspi->ctrl = ctrl;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "qspi");
 	qspi->io_base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(qspi->io_base))
-		return PTR_ERR(qspi->io_base);
+	if (IS_ERR(qspi->io_base)) {
+		ret = PTR_ERR(qspi->io_base);
+		goto err_master_put;
+	}
+
+	qspi->phys_base = res->start;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "qspi_mm");
 	qspi->mm_base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(qspi->mm_base))
-		return PTR_ERR(qspi->mm_base);
+	if (IS_ERR(qspi->mm_base)) {
+		ret = PTR_ERR(qspi->mm_base);
+		goto err_master_put;
+	}
 
 	qspi->mm_size = resource_size(res);
-	if (qspi->mm_size > STM32_QSPI_MAX_MMAP_SZ)
-		return -EINVAL;
+	if (qspi->mm_size > STM32_QSPI_MAX_MMAP_SZ) {
+		ret = -EINVAL;
+		goto err_master_put;
+	}
 
 	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		ret = irq;
+		goto err_master_put;
+	}
+
 	ret = devm_request_irq(dev, irq, stm32_qspi_irq, 0,
 			       dev_name(dev), qspi);
 	if (ret) {
 		dev_err(dev, "failed to request irq\n");
-		return ret;
+		goto err_master_put;
 	}
 
 	init_completion(&qspi->data_completion);
 
 	qspi->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(qspi->clk))
-		return PTR_ERR(qspi->clk);
+	if (IS_ERR(qspi->clk)) {
+		ret = PTR_ERR(qspi->clk);
+		goto err_master_put;
+	}
 
 	qspi->clk_rate = clk_get_rate(qspi->clk);
-	if (!qspi->clk_rate)
-		return -EINVAL;
+	if (!qspi->clk_rate) {
+		ret = -EINVAL;
+		goto err_master_put;
+	}
 
 	ret = clk_prepare_enable(qspi->clk);
 	if (ret) {
 		dev_err(dev, "can not enable the clock\n");
-		return ret;
+		goto err_master_put;
 	}
 
 	rstc = devm_reset_control_get_exclusive(dev, NULL);
-	if (!IS_ERR(rstc)) {
+	if (IS_ERR(rstc)) {
+		ret = PTR_ERR(rstc);
+		if (ret == -EPROBE_DEFER)
+			goto err_clk_disable;
+	} else {
 		reset_control_assert(rstc);
 		udelay(2);
 		reset_control_deassert(rstc);
@@ -461,6 +693,10 @@ static int stm32_qspi_probe(struct platform_device *pdev)
 
 	qspi->dev = dev;
 	platform_set_drvdata(pdev, qspi);
+	ret = stm32_qspi_dma_setup(qspi);
+	if (ret)
+		goto err_dma_free;
+
 	mutex_init(&qspi->lock);
 
 	ctrl->mode_bits = SPI_RX_DUAL | SPI_RX_QUAD
@@ -471,14 +707,36 @@ static int stm32_qspi_probe(struct platform_device *pdev)
 	ctrl->num_chipselect = STM32_QSPI_MAX_NORCHIP;
 	ctrl->dev.of_node = dev->of_node;
 
+	pm_runtime_set_autosuspend_delay(dev, STM32_AUTOSUSPEND_DELAY);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
+	pm_runtime_get_noresume(dev);
+
 	ret = devm_spi_register_master(dev, ctrl);
 	if (ret)
-		goto err_spi_register;
+		goto err_pm_runtime_free;
+
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
 
 	return 0;
 
-err_spi_register:
-	stm32_qspi_release(qspi);
+err_pm_runtime_free:
+	pm_runtime_get_sync(qspi->dev);
+	/* disable qspi */
+	writel_relaxed(0, qspi->io_base + QSPI_CR);
+	mutex_destroy(&qspi->lock);
+	pm_runtime_put_noidle(qspi->dev);
+	pm_runtime_disable(qspi->dev);
+	pm_runtime_set_suspended(qspi->dev);
+	pm_runtime_dont_use_autosuspend(qspi->dev);
+err_dma_free:
+	stm32_qspi_dma_free(qspi);
+err_clk_disable:
+	clk_disable_unprepare(qspi->clk);
+err_master_put:
+	spi_master_put(qspi->ctrl);
 
 	return ret;
 }
@@ -487,9 +745,74 @@ static int stm32_qspi_remove(struct platform_device *pdev)
 {
 	struct stm32_qspi *qspi = platform_get_drvdata(pdev);
 
-	stm32_qspi_release(qspi);
+	pm_runtime_get_sync(qspi->dev);
+	/* disable qspi */
+	writel_relaxed(0, qspi->io_base + QSPI_CR);
+	stm32_qspi_dma_free(qspi);
+	mutex_destroy(&qspi->lock);
+	pm_runtime_put_noidle(qspi->dev);
+	pm_runtime_disable(qspi->dev);
+	pm_runtime_set_suspended(qspi->dev);
+	pm_runtime_dont_use_autosuspend(qspi->dev);
+	clk_disable_unprepare(qspi->clk);
+
 	return 0;
 }
+
+static int __maybe_unused stm32_qspi_runtime_suspend(struct device *dev)
+{
+	struct stm32_qspi *qspi = dev_get_drvdata(dev);
+
+	clk_disable_unprepare(qspi->clk);
+
+	return 0;
+}
+
+static int __maybe_unused stm32_qspi_runtime_resume(struct device *dev)
+{
+	struct stm32_qspi *qspi = dev_get_drvdata(dev);
+
+	return clk_prepare_enable(qspi->clk);
+}
+
+static int __maybe_unused stm32_qspi_suspend(struct device *dev)
+{
+	pinctrl_pm_select_sleep_state(dev);
+
+	return pm_runtime_force_suspend(dev);
+}
+
+static int __maybe_unused stm32_qspi_resume(struct device *dev)
+{
+	struct stm32_qspi *qspi = dev_get_drvdata(dev);
+	int ret;
+
+	ret = pm_runtime_force_resume(dev);
+	if (ret < 0)
+		return ret;
+
+	pinctrl_pm_select_default_state(dev);
+
+	ret = pm_runtime_get_sync(dev);
+	if (ret < 0) {
+		pm_runtime_put_noidle(dev);
+		return ret;
+	}
+
+	writel_relaxed(qspi->cr_reg, qspi->io_base + QSPI_CR);
+	writel_relaxed(qspi->dcr_reg, qspi->io_base + QSPI_DCR);
+
+	pm_runtime_mark_last_busy(dev);
+	pm_runtime_put_autosuspend(dev);
+
+	return 0;
+}
+
+static const struct dev_pm_ops stm32_qspi_pm_ops = {
+	SET_RUNTIME_PM_OPS(stm32_qspi_runtime_suspend,
+			   stm32_qspi_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(stm32_qspi_suspend, stm32_qspi_resume)
+};
 
 static const struct of_device_id stm32_qspi_match[] = {
 	{.compatible = "st,stm32f469-qspi"},
@@ -503,6 +826,7 @@ static struct platform_driver stm32_qspi_driver = {
 	.driver	= {
 		.name = "stm32-qspi",
 		.of_match_table = stm32_qspi_match,
+		.pm = &stm32_qspi_pm_ops,
 	},
 };
 module_platform_driver(stm32_qspi_driver);

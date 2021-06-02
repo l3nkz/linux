@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  *
  * Parts of this file are based on Ralink's 2.6.21 BSP
  *
@@ -641,7 +639,7 @@ mt7628_dram_init(struct ralink_soc_info *soc_info)
 	}
 }
 
-void prom_soc_init(struct ralink_soc_info *soc_info)
+void __init prom_soc_init(struct ralink_soc_info *soc_info)
 {
 	void __iomem *sysc = (void __iomem *) KSEG1ADDR(MT7620_SYSC_BASE);
 	unsigned char *name = NULL;

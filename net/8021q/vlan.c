@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * INET		802.1Q VLAN
  *		Ethernet-type device handling.
@@ -11,11 +12,6 @@
  *		Add HW acceleration hooks - David S. Miller <davem@redhat.com>;
  *		Correct all the locking - David S. Miller <davem@redhat.com>;
  *		Use hash table for VLAN groups - David S. Miller <davem@redhat.com>
- *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU General Public License
- *		as published by the Free Software Foundation; either version
- *		2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -55,12 +51,16 @@ static int vlan_group_prealloc_vid(struct vlan_group *vg,
 				   __be16 vlan_proto, u16 vlan_id)
 {
 	struct net_device **array;
-	unsigned int pidx, vidx;
+	unsigned int vidx;
 	unsigned int size;
+	int pidx;
 
 	ASSERT_RTNL();
 
 	pidx  = vlan_proto_idx(vlan_proto);
+	if (pidx < 0)
+		return -EINVAL;
+
 	vidx  = vlan_id / VLAN_GROUP_ARRAY_PART_LEN;
 	array = vg->vlan_devices_arrays[pidx][vidx];
 	if (array != NULL)
@@ -71,8 +71,19 @@ static int vlan_group_prealloc_vid(struct vlan_group *vg,
 	if (array == NULL)
 		return -ENOBUFS;
 
+	/* paired with smp_rmb() in __vlan_group_get_device() */
+	smp_wmb();
+
 	vg->vlan_devices_arrays[pidx][vidx] = array;
 	return 0;
+}
+
+static void vlan_stacked_transfer_operstate(const struct net_device *rootdev,
+					    struct net_device *dev,
+					    struct vlan_dev_priv *vlan)
+{
+	if (!(vlan->flags & VLAN_FLAG_BRIDGE_BINDING))
+		netif_stacked_transfer_operstate(rootdev, dev);
 }
 
 void unregister_vlan_dev(struct net_device *dev, struct list_head *head)
@@ -168,7 +179,6 @@ int register_vlan_dev(struct net_device *dev, struct netlink_ext_ack *extack)
 	if (err < 0)
 		goto out_uninit_mvrp;
 
-	vlan->nest_level = dev_get_nest_level(real_dev) + 1;
 	err = register_netdevice(dev);
 	if (err < 0)
 		goto out_uninit_mvrp;
@@ -180,7 +190,7 @@ int register_vlan_dev(struct net_device *dev, struct netlink_ext_ack *extack)
 	/* Account for reference in struct vlan_dev_priv */
 	dev_hold(real_dev);
 
-	netif_stacked_transfer_operstate(real_dev, dev);
+	vlan_stacked_transfer_operstate(real_dev, dev, vlan);
 	linkwatch_fire_event(dev); /* _MUST_ call rfc2863_policy() */
 
 	/* So, got the sucker initialized, now lets place
@@ -277,8 +287,7 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 	return 0;
 
 out_free_newdev:
-	if (new_dev->reg_state == NETREG_UNINITIALIZED)
-		free_netdev(new_dev);
+	free_netdev(new_dev);
 	return err;
 }
 
@@ -399,7 +408,8 @@ static int vlan_device_event(struct notifier_block *unused, unsigned long event,
 	case NETDEV_CHANGE:
 		/* Propagate real device state to vlan devices */
 		vlan_group_for_each_dev(grp, i, vlandev)
-			netif_stacked_transfer_operstate(dev, vlandev);
+			vlan_stacked_transfer_operstate(dev, vlandev,
+							vlan_dev_priv(vlandev));
 		break;
 
 	case NETDEV_CHANGEADDR:
@@ -446,7 +456,8 @@ static int vlan_device_event(struct notifier_block *unused, unsigned long event,
 		dev_close_many(&close_list, false);
 
 		list_for_each_entry_safe(vlandev, tmp, &close_list, close_list) {
-			netif_stacked_transfer_operstate(dev, vlandev);
+			vlan_stacked_transfer_operstate(dev, vlandev,
+							vlan_dev_priv(vlandev));
 			list_del_init(&vlandev->close_list);
 		}
 		list_del(&close_list);
@@ -463,7 +474,7 @@ static int vlan_device_event(struct notifier_block *unused, unsigned long event,
 			if (!(vlan->flags & VLAN_FLAG_LOOSE_BINDING))
 				dev_change_flags(vlandev, flgs | IFF_UP,
 						 extack);
-			netif_stacked_transfer_operstate(dev, vlandev);
+			vlan_stacked_transfer_operstate(dev, vlandev, vlan);
 		}
 		break;
 

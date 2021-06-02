@@ -51,17 +51,6 @@ static inline void set_64bit_val(u64 *wqe_words, u32 byte_index, u64 value)
 }
 
 /**
- * set_32bit_val - set 32 value to hw wqe
- * @wqe_words: wqe addr to write
- * @byte_index: index in wqe
- * @value: value to write
- **/
-static inline void set_32bit_val(u32 *wqe_words, u32 byte_index, u32 value)
-{
-	wqe_words[byte_index >> 2] = value;
-}
-
-/**
  * get_64bit_val - read 64 bit value from wqe
  * @wqe_words: wqe addr
  * @byte_index: index to read from
@@ -70,17 +59,6 @@ static inline void set_32bit_val(u32 *wqe_words, u32 byte_index, u32 value)
 static inline void get_64bit_val(u64 *wqe_words, u32 byte_index, u64 *value)
 {
 	*value = wqe_words[byte_index >> 3];
-}
-
-/**
- * get_32bit_val - read 32 bit value from wqe
- * @wqe_words: wqe addr
- * @byte_index: index to reaad from
- * @value: return 32 bit value
- **/
-static inline void get_32bit_val(u32 *wqe_words, u32 byte_index, u32 *value)
-{
-	*value = wqe_words[byte_index >> 2];
 }
 
 struct i40iw_dma_mem {
@@ -211,7 +189,7 @@ enum i40iw_status_code i40iw_hw_manage_vf_pble_bp(struct i40iw_device *iwdev,
 struct i40iw_sc_vsi;
 void i40iw_hw_stats_start_timer(struct i40iw_sc_vsi *vsi);
 void i40iw_hw_stats_stop_timer(struct i40iw_sc_vsi *vsi);
-#define i40iw_mmiowb() mmiowb()
+#define i40iw_mmiowb() do { } while (0)
 void i40iw_wr32(struct i40iw_hw *hw, u32 reg, u32 value);
 u32  i40iw_rd32(struct i40iw_hw *hw, u32 reg);
 #endif				/* _I40IW_OSDEP_H_ */

@@ -37,16 +37,16 @@ static sccb_mask_t sclp_receive_mask;
 static sccb_mask_t sclp_send_mask;
 
 /* List of registered event listeners and senders. */
-static struct list_head sclp_reg_list;
+static LIST_HEAD(sclp_reg_list);
 
 /* List of queued requests. */
-static struct list_head sclp_req_queue;
+static LIST_HEAD(sclp_req_queue);
 
 /* Data for read and and init requests. */
 static struct sclp_req sclp_read_req;
 static struct sclp_req sclp_init_req;
-static char sclp_read_sccb[PAGE_SIZE] __attribute__((__aligned__(PAGE_SIZE)));
-static char sclp_init_sccb[PAGE_SIZE] __attribute__((__aligned__(PAGE_SIZE)));
+static void *sclp_read_sccb;
+static struct init_sccb *sclp_init_sccb;
 
 /* Suspend request */
 static DECLARE_COMPLETION(sclp_request_queue_flushed);
@@ -753,9 +753,8 @@ EXPORT_SYMBOL(sclp_remove_processed);
 static inline void
 __sclp_make_init_req(sccb_mask_t receive_mask, sccb_mask_t send_mask)
 {
-	struct init_sccb *sccb;
+	struct init_sccb *sccb = sclp_init_sccb;
 
-	sccb = (struct init_sccb *) sclp_init_sccb;
 	clear_page(sccb);
 	memset(&sclp_init_req, 0, sizeof(struct sclp_req));
 	sclp_init_req.command = SCLP_CMDW_WRITE_EVENT_MASK;
@@ -782,7 +781,7 @@ static int
 sclp_init_mask(int calculate)
 {
 	unsigned long flags;
-	struct init_sccb *sccb = (struct init_sccb *) sclp_init_sccb;
+	struct init_sccb *sccb = sclp_init_sccb;
 	sccb_mask_t receive_mask;
 	sccb_mask_t send_mask;
 	int retry;
@@ -1175,9 +1174,10 @@ sclp_init(void)
 	if (sclp_init_state != sclp_init_state_uninitialized)
 		goto fail_unlock;
 	sclp_init_state = sclp_init_state_initializing;
+	sclp_read_sccb = (void *) __get_free_page(GFP_ATOMIC | GFP_DMA);
+	sclp_init_sccb = (void *) __get_free_page(GFP_ATOMIC | GFP_DMA);
+	BUG_ON(!sclp_read_sccb || !sclp_init_sccb);
 	/* Set up variables */
-	INIT_LIST_HEAD(&sclp_req_queue);
-	INIT_LIST_HEAD(&sclp_reg_list);
 	list_add(&sclp_state_change_event.list, &sclp_reg_list);
 	timer_setup(&sclp_request_timer, NULL, 0);
 	timer_setup(&sclp_queue_timer, sclp_req_queue_timeout, 0);
@@ -1207,6 +1207,8 @@ fail_unregister_reboot_notifier:
 	unregister_reboot_notifier(&sclp_reboot_notifier);
 fail_init_state_uninitialized:
 	sclp_init_state = sclp_init_state_uninitialized;
+	free_page((unsigned long) sclp_read_sccb);
+	free_page((unsigned long) sclp_init_sccb);
 fail_unlock:
 	spin_unlock_irqrestore(&sclp_lock, flags);
 	return rc;

@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Secure Element driver for STMicroelectronics NFC NCI chip
  *
  * Copyright (C) 2014-2015 STMicroelectronics SAS. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/module.h>
@@ -287,7 +276,6 @@ static int st_nci_hci_apdu_reader_event_received(struct nci_dev *ndev,
 						   u8 event,
 						   struct sk_buff *skb)
 {
-	int r = 0;
 	struct st_nci_info *info = nci_get_drvdata(ndev);
 
 	pr_debug("apdu reader gate event: %x\n", event);
@@ -309,7 +297,7 @@ static int st_nci_hci_apdu_reader_event_received(struct nci_dev *ndev,
 	}
 
 	kfree_skb(skb);
-	return r;
+	return 0;
 }
 
 /*
@@ -342,8 +330,9 @@ static int st_nci_hci_connectivity_event_received(struct nci_dev *ndev,
 		    skb->data[0] != NFC_EVT_TRANSACTION_AID_TAG)
 			return -EPROTO;
 
-		transaction = (struct nfc_evt_transaction *)devm_kzalloc(dev,
-					    skb->len - 2, GFP_KERNEL);
+		transaction = devm_kzalloc(dev, skb->len - 2, GFP_KERNEL);
+		if (!transaction)
+			return -ENOMEM;
 
 		transaction->aid_len = skb->data[1];
 		memcpy(transaction->aid, &skb->data[2], transaction->aid_len);

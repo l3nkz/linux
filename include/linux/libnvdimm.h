@@ -1,16 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * libnvdimm - Non-volatile-memory Devices Subsystem
  *
  * Copyright(c) 2013-2015 Intel Corporation. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 #ifndef __LIBNVDIMM_H__
 #define __LIBNVDIMM_H__
@@ -19,6 +11,7 @@
 #include <linux/types.h>
 #include <linux/uuid.h>
 #include <linux/spinlock.h>
+#include <linux/bio.h>
 
 struct badrange_entry {
 	u64 start;
@@ -42,6 +35,10 @@ enum {
 	NDD_SECURITY_OVERWRITE = 3,
 	/*  tracking whether or not there is a pending device reference */
 	NDD_WORK_PENDING = 4,
+	/* ignore / filter NSLABEL_FLAG_LOCAL for this DIMM, i.e. no aliasing */
+	NDD_NOBLK = 5,
+	/* dimm supports namespace labels */
+	NDD_LABELING = 6,
 
 	/* need to set a limit somewhere, but yes, this is likely overkill */
 	ND_IOCTL_MAX_BUFLEN = SZ_4M,
@@ -63,16 +60,12 @@ enum {
 	 */
 	ND_REGION_PERSIST_MEMCTRL = 2,
 
+	/* Platform provides asynchronous flush mechanism */
+	ND_REGION_ASYNC = 3,
+
 	/* mark newly adjusted resources as requiring a label update */
 	DPA_RESOURCE_ADJUSTED = 1 << 0,
 };
-
-extern struct attribute_group nvdimm_bus_attribute_group;
-extern struct attribute_group nvdimm_attribute_group;
-extern struct attribute_group nd_device_attribute_group;
-extern struct attribute_group nd_numa_attribute_group;
-extern struct attribute_group nd_region_attribute_group;
-extern struct attribute_group nd_mapping_attribute_group;
 
 struct nvdimm;
 struct nvdimm_bus_descriptor;
@@ -83,8 +76,9 @@ typedef int (*ndctl_fn)(struct nvdimm_bus_descriptor *nd_desc,
 struct device_node;
 struct nvdimm_bus_descriptor {
 	const struct attribute_group **attr_groups;
-	unsigned long bus_dsm_mask;
 	unsigned long cmd_mask;
+	unsigned long dimm_family_mask;
+	unsigned long bus_family_mask;
 	struct module *module;
 	char *provider_name;
 	struct device_node *of_node;
@@ -92,6 +86,7 @@ struct nvdimm_bus_descriptor {
 	int (*flush_probe)(struct nvdimm_bus_descriptor *nd_desc);
 	int (*clear_to_send)(struct nvdimm_bus_descriptor *nd_desc,
 			struct nvdimm *nvdimm, unsigned int cmd, void *data);
+	const struct nvdimm_bus_fw_ops *fw_ops;
 };
 
 struct nd_cmd_desc {
@@ -119,6 +114,7 @@ struct nd_mapping_desc {
 	int position;
 };
 
+struct nd_region;
 struct nd_region_desc {
 	struct resource *res;
 	struct nd_mapping_desc *mapping;
@@ -128,8 +124,10 @@ struct nd_region_desc {
 	void *provider_data;
 	int num_lanes;
 	int numa_node;
+	int target_node;
 	unsigned long flags;
 	struct device_node *of_node;
+	int (*flush)(struct nd_region *nd_region, struct bio *bio);
 };
 
 struct device;
@@ -143,7 +141,6 @@ static inline void __iomem *devm_nvdimm_ioremap(struct device *dev,
 
 struct nvdimm_bus;
 struct module;
-struct device;
 struct nd_blk_region;
 struct nd_blk_region_desc {
 	int (*enable)(struct nvdimm_bus *nvdimm_bus, struct device *dev);
@@ -159,8 +156,11 @@ static inline struct nd_blk_region_desc *to_blk_region_desc(
 
 }
 
-enum nvdimm_security_state {
-	NVDIMM_SECURITY_ERROR = -1,
+/*
+ * Note that separate bits for locked + unlocked are defined so that
+ * 'flags == 0' corresponds to an error / not-supported state.
+ */
+enum nvdimm_security_bits {
 	NVDIMM_SECURITY_DISABLED,
 	NVDIMM_SECURITY_UNLOCKED,
 	NVDIMM_SECURITY_LOCKED,
@@ -181,7 +181,7 @@ enum nvdimm_passphrase_type {
 };
 
 struct nvdimm_security_ops {
-	enum nvdimm_security_state (*state)(struct nvdimm *nvdimm,
+	unsigned long (*get_flags)(struct nvdimm *nvdimm,
 			enum nvdimm_passphrase_type pass_type);
 	int (*freeze)(struct nvdimm *nvdimm);
 	int (*change_key)(struct nvdimm *nvdimm,
@@ -198,6 +198,49 @@ struct nvdimm_security_ops {
 	int (*overwrite)(struct nvdimm *nvdimm,
 			const struct nvdimm_key_data *key_data);
 	int (*query_overwrite)(struct nvdimm *nvdimm);
+};
+
+enum nvdimm_fwa_state {
+	NVDIMM_FWA_INVALID,
+	NVDIMM_FWA_IDLE,
+	NVDIMM_FWA_ARMED,
+	NVDIMM_FWA_BUSY,
+	NVDIMM_FWA_ARM_OVERFLOW,
+};
+
+enum nvdimm_fwa_trigger {
+	NVDIMM_FWA_ARM,
+	NVDIMM_FWA_DISARM,
+};
+
+enum nvdimm_fwa_capability {
+	NVDIMM_FWA_CAP_INVALID,
+	NVDIMM_FWA_CAP_NONE,
+	NVDIMM_FWA_CAP_QUIESCE,
+	NVDIMM_FWA_CAP_LIVE,
+};
+
+enum nvdimm_fwa_result {
+	NVDIMM_FWA_RESULT_INVALID,
+	NVDIMM_FWA_RESULT_NONE,
+	NVDIMM_FWA_RESULT_SUCCESS,
+	NVDIMM_FWA_RESULT_NOTSTAGED,
+	NVDIMM_FWA_RESULT_NEEDRESET,
+	NVDIMM_FWA_RESULT_FAIL,
+};
+
+struct nvdimm_bus_fw_ops {
+	enum nvdimm_fwa_state (*activate_state)
+		(struct nvdimm_bus_descriptor *nd_desc);
+	enum nvdimm_fwa_capability (*capability)
+		(struct nvdimm_bus_descriptor *nd_desc);
+	int (*activate)(struct nvdimm_bus_descriptor *nd_desc);
+};
+
+struct nvdimm_fw_ops {
+	enum nvdimm_fwa_state (*activate_state)(struct nvdimm *nvdimm);
+	enum nvdimm_fwa_result (*activate_result)(struct nvdimm *nvdimm);
+	int (*arm)(struct nvdimm *nvdimm, enum nvdimm_fwa_trigger arg);
 };
 
 void badrange_init(struct badrange *badrange);
@@ -225,14 +268,15 @@ struct nvdimm *__nvdimm_create(struct nvdimm_bus *nvdimm_bus,
 		void *provider_data, const struct attribute_group **groups,
 		unsigned long flags, unsigned long cmd_mask, int num_flush,
 		struct resource *flush_wpq, const char *dimm_id,
-		const struct nvdimm_security_ops *sec_ops);
+		const struct nvdimm_security_ops *sec_ops,
+		const struct nvdimm_fw_ops *fw_ops);
 static inline struct nvdimm *nvdimm_create(struct nvdimm_bus *nvdimm_bus,
 		void *provider_data, const struct attribute_group **groups,
 		unsigned long flags, unsigned long cmd_mask, int num_flush,
 		struct resource *flush_wpq)
 {
 	return __nvdimm_create(nvdimm_bus, provider_data, groups, flags,
-			cmd_mask, num_flush, flush_wpq, NULL, NULL);
+			cmd_mask, num_flush, flush_wpq, NULL, NULL, NULL);
 }
 
 const struct nd_cmd_desc *nd_cmd_dimm_desc(int cmd);
@@ -257,10 +301,12 @@ unsigned long nd_blk_memremap_flags(struct nd_blk_region *ndbr);
 unsigned int nd_region_acquire_lane(struct nd_region *nd_region);
 void nd_region_release_lane(struct nd_region *nd_region, unsigned int lane);
 u64 nd_fletcher64(void *addr, size_t len, bool le);
-void nvdimm_flush(struct nd_region *nd_region);
+int nvdimm_flush(struct nd_region *nd_region, struct bio *bio);
+int generic_nvdimm_flush(struct nd_region *nd_region);
 int nvdimm_has_flush(struct nd_region *nd_region);
 int nvdimm_has_cache(struct nd_region *nd_region);
 int nvdimm_in_overwrite(struct nvdimm *nvdimm);
+bool is_nvdimm_sync(struct nd_region *nd_region);
 
 static inline int nvdimm_ctl(struct nvdimm *nvdimm, unsigned int cmd, void *buf,
 		unsigned int buf_len, int *cmd_rc)

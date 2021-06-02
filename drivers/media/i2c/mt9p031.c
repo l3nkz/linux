@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for MT9P031 CMOS Image Sensor from Aptina
  *
@@ -6,10 +7,6 @@
  * Copyright (C) 2011, Guennadi Liakhovetski <g.liakhovetski@gmx.de>
  *
  * Based on the MT9V032 driver and Bastian Hecht's code.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -349,8 +346,7 @@ static void mt9p031_power_off(struct mt9p031 *mt9p031)
 	regulator_bulk_disable(ARRAY_SIZE(mt9p031->regulators),
 			       mt9p031->regulators);
 
-	if (mt9p031->clk)
-		clk_disable_unprepare(mt9p031->clk);
+	clk_disable_unprepare(mt9p031->clk);
 }
 
 static int __mt9p031_set_power(struct mt9p031 *mt9p031, bool on)
@@ -1034,7 +1030,7 @@ static int mt9p031_probe(struct i2c_client *client,
 			 const struct i2c_device_id *did)
 {
 	struct mt9p031_platform_data *pdata = mt9p031_get_pdata(client);
-	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
+	struct i2c_adapter *adapter = client->adapter;
 	struct mt9p031 *mt9p031;
 	unsigned int i;
 	int ret;

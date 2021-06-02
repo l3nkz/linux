@@ -1,18 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Driver for Realtek USB card reader
  *
  * Copyright(c) 2009-2013 Realtek Semiconductor Corp. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Author:
  *   Roger Tseng <rogerable@realtek.com>
@@ -770,7 +759,7 @@ static int rtsx_usb_post_reset(struct usb_interface *intf)
 	return 0;
 }
 
-static struct usb_device_id rtsx_usb_usb_ids[] = {
+static const struct usb_device_id rtsx_usb_usb_ids[] = {
 	{ USB_DEVICE(0x0BDA, 0x0129) },
 	{ USB_DEVICE(0x0BDA, 0x0139) },
 	{ USB_DEVICE(0x0BDA, 0x0140) },

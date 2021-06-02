@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2018, NVIDIA CORPORATION.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/delay.h>
@@ -20,6 +12,8 @@
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
+
+#include <soc/tegra/fuse.h>
 
 #include <dt-bindings/mailbox/tegra186-hsp.h>
 
@@ -104,7 +98,9 @@ struct tegra_hsp {
 	unsigned int num_ss;
 	unsigned int num_db;
 	unsigned int num_si;
+
 	spinlock_t lock;
+	struct lock_class_key lock_key;
 
 	struct list_head doorbells;
 	struct tegra_hsp_mailbox *mailboxes;
@@ -330,7 +326,12 @@ static int tegra_hsp_doorbell_startup(struct mbox_chan *chan)
 	if (!ccplex)
 		return -ENODEV;
 
-	if (!tegra_hsp_doorbell_can_ring(db))
+	/*
+	 * On simulation platforms the BPMP hasn't had a chance yet to mark
+	 * the doorbell as ringable by the CCPLEX, so we want to skip extra
+	 * checks here.
+	 */
+	if (tegra_is_silicon() && !tegra_hsp_doorbell_can_ring(db))
 		return -ENODEV;
 
 	spin_lock_irqsave(&hsp->lock, flags);
@@ -665,7 +666,7 @@ static int tegra_hsp_probe(struct platform_device *pdev)
 	hsp->num_db = (value >> HSP_nDB_SHIFT) & HSP_nINT_MASK;
 	hsp->num_si = (value >> HSP_nSI_SHIFT) & HSP_nINT_MASK;
 
-	err = platform_get_irq_byname(pdev, "doorbell");
+	err = platform_get_irq_byname_optional(pdev, "doorbell");
 	if (err >= 0)
 		hsp->doorbell_irq = err;
 
@@ -685,7 +686,7 @@ static int tegra_hsp_probe(struct platform_device *pdev)
 			if (!name)
 				return -ENOMEM;
 
-			err = platform_get_irq_byname(pdev, name);
+			err = platform_get_irq_byname_optional(pdev, name);
 			if (err >= 0) {
 				hsp->shared_irqs[i] = err;
 				count++;
@@ -776,25 +777,47 @@ static int tegra_hsp_probe(struct platform_device *pdev)
 			return err;
 	}
 
+	lockdep_register_key(&hsp->lock_key);
+	lockdep_set_class(&hsp->lock, &hsp->lock_key);
+
 	return 0;
 }
 
-static int tegra_hsp_resume(struct device *dev)
+static int tegra_hsp_remove(struct platform_device *pdev)
+{
+	struct tegra_hsp *hsp = platform_get_drvdata(pdev);
+
+	lockdep_unregister_key(&hsp->lock_key);
+
+	return 0;
+}
+
+static int __maybe_unused tegra_hsp_resume(struct device *dev)
 {
 	struct tegra_hsp *hsp = dev_get_drvdata(dev);
 	unsigned int i;
+	struct tegra_hsp_doorbell *db;
 
-	for (i = 0; i < hsp->num_sm; i++) {
-		struct tegra_hsp_mailbox *mb = &hsp->mailboxes[i];
+	list_for_each_entry(db, &hsp->doorbells, list) {
+		if (db && db->channel.chan)
+			tegra_hsp_doorbell_startup(db->channel.chan);
+	}
 
-		if (mb->channel.chan->cl)
-			tegra_hsp_mailbox_startup(mb->channel.chan);
+	if (hsp->mailboxes) {
+		for (i = 0; i < hsp->num_sm; i++) {
+			struct tegra_hsp_mailbox *mb = &hsp->mailboxes[i];
+
+			if (mb->channel.chan->cl)
+				tegra_hsp_mailbox_startup(mb->channel.chan);
+		}
 	}
 
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(tegra_hsp_pm_ops, NULL, tegra_hsp_resume);
+static const struct dev_pm_ops tegra_hsp_pm_ops = {
+	.resume_noirq = tegra_hsp_resume,
+};
 
 static const struct tegra_hsp_db_map tegra186_hsp_db_map[] = {
 	{ "ccplex", TEGRA_HSP_DB_MASTER_CCPLEX, HSP_DB_CCPLEX, },
@@ -825,6 +848,7 @@ static struct platform_driver tegra_hsp_driver = {
 		.pm = &tegra_hsp_pm_ops,
 	},
 	.probe = tegra_hsp_probe,
+	.remove = tegra_hsp_remove,
 };
 
 static int __init tegra_hsp_init(void)

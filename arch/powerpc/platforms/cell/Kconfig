@@ -44,6 +44,7 @@ config SPU_FS
 	tristate "SPU file system"
 	default m
 	depends on PPC_CELL
+	depends on COREDUMP
 	select SPU_BASE
 	help
 	  The SPU file system is used to access Synergistic Processing
@@ -99,8 +100,3 @@ config CBE_CPUFREQ_SPU_GOVERNOR
 	  the minimal possible frequency.
 
 endmenu
-
-config OPROFILE_CELL
-	def_bool y
-	depends on PPC_CELL_NATIVE && (OPROFILE = m || OPROFILE = y) && SPU_BASE
-

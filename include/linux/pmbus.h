@@ -1,25 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Hardware monitoring driver for PMBus devices
  *
  * Copyright (c) 2010, 2011 Ericsson AB.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifndef _PMBUS_H_
 #define _PMBUS_H_
+
+#include <linux/bits.h>
 
 /* flags */
 
@@ -36,7 +25,23 @@
  * communication errors for no explicable reason. For such chips, checking
  * the status register must be disabled.
  */
-#define PMBUS_SKIP_STATUS_CHECK	(1 << 0)
+#define PMBUS_SKIP_STATUS_CHECK	BIT(0)
+
+/*
+ * PMBUS_WRITE_PROTECTED
+ * Set if the chip is write protected and write protection is not determined
+ * by the standard WRITE_PROTECT command.
+ */
+#define PMBUS_WRITE_PROTECTED	BIT(1)
+
+/*
+ * PMBUS_NO_CAPABILITY
+ *
+ * Some PMBus chips don't respond with valid data when reading the CAPABILITY
+ * register. For such chips, this flag should be set so that the PMBus core
+ * driver doesn't use CAPABILITY to determine it's behavior.
+ */
+#define PMBUS_NO_CAPABILITY			BIT(2)
 
 struct pmbus_platform_data {
 	u32 flags;		/* Device specific flags */

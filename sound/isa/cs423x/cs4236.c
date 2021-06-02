@@ -1,22 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for generic CS4232/CS4235/CS4236/CS4236B/CS4237B/CS4238B/CS4239 chips
  *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
- *
- *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the Free Software
- *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
- *
  */
 
 #include <linux/init.h>
@@ -33,40 +18,6 @@
 MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Cirrus Logic CS4232-9");
-MODULE_SUPPORTED_DEVICE("{{Turtle Beach,TBS-2000},"
-		"{Turtle Beach,Tropez Plus},"
-		"{SIC CrystalWave 32},"
-		"{Hewlett Packard,Omnibook 5500},"
-		"{TerraTec,Maestro 32/96},"
-		"{Philips,PCA70PS}},"
-		"{{Crystal Semiconductors,CS4235},"
-		"{Crystal Semiconductors,CS4236},"
-		"{Crystal Semiconductors,CS4237},"
-		"{Crystal Semiconductors,CS4238},"
-		"{Crystal Semiconductors,CS4239},"
-		"{Acer,AW37},"
-		"{Acer,AW35/Pro},"
-		"{Crystal,3D},"
-		"{Crystal Computer,TidalWave128},"
-		"{Dell,Optiplex GX1},"
-		"{Dell,Workstation 400 sound},"
-		"{EliteGroup,P5TX-LA sound},"
-		"{Gallant,SC-70P},"
-		"{Gateway,E1000 Onboard CS4236B},"
-		"{Genius,Sound Maker 3DJ},"
-		"{Hewlett Packard,HP6330 sound},"
-		"{IBM,PC 300PL sound},"
-		"{IBM,Aptiva 2137 E24},"
-		"{IBM,IntelliStation M Pro},"
-		"{Intel,Marlin Spike Mobo CS4235},"
-		"{Intel PR440FX Onboard},"
-		"{Guillemot,MaxiSound 16 PnP},"
-		"{NewClear,3D},"
-		"{TerraTec,AudioSystem EWS64L/XL},"
-		"{Typhoon Soundsystem,CS4236B},"
-		"{Turtle Beach,Malibu},"
-		"{Unknown,Digital PC 5000 Onboard}}");
-
 MODULE_ALIAS("snd_cs4232");
 
 #define IDENT "CS4232+"
@@ -293,7 +244,8 @@ static int snd_cs423x_pnp_init_mpu(int dev, struct pnp_dev *pdev)
 	} else {
 		mpu_port[dev] = pnp_port_start(pdev, 0);
 		if (mpu_irq[dev] >= 0 &&
-		    pnp_irq_valid(pdev, 0) && pnp_irq(pdev, 0) >= 0) {
+		    pnp_irq_valid(pdev, 0) &&
+		    pnp_irq(pdev, 0) != (resource_size_t)-1) {
 			mpu_irq[dev] = pnp_irq(pdev, 0);
 		} else {
 			mpu_irq[dev] = -1;	/* disable interrupt */
@@ -419,8 +371,8 @@ static int snd_cs423x_probe(struct snd_card *card, int dev)
 		if (err < 0)
 			return err;
 	}
-	strlcpy(card->driver, chip->pcm->name, sizeof(card->driver));
-	strlcpy(card->shortname, chip->pcm->name, sizeof(card->shortname));
+	strscpy(card->driver, chip->pcm->name, sizeof(card->driver));
+	strscpy(card->shortname, chip->pcm->name, sizeof(card->shortname));
 	if (dma2[dev] < 0)
 		snprintf(card->longname, sizeof(card->longname),
 			 "%s at 0x%lx, irq %i, dma %i",
@@ -501,11 +453,10 @@ static int snd_cs423x_isa_probe(struct device *pdev,
 	return 0;
 }
 
-static int snd_cs423x_isa_remove(struct device *pdev,
+static void snd_cs423x_isa_remove(struct device *pdev,
 				 unsigned int dev)
 {
 	snd_card_free(dev_get_drvdata(pdev));
-	return 0;
 }
 
 #ifdef CONFIG_PM

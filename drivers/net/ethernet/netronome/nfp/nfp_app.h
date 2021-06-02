@@ -18,7 +18,6 @@ struct netdev_bpf;
 struct netlink_ext_ack;
 struct pci_dev;
 struct sk_buff;
-struct sk_buff;
 struct nfp_app;
 struct nfp_cpp;
 struct nfp_pf;
@@ -79,7 +78,7 @@ extern const struct nfp_app_type app_abm;
  * @eswitch_mode_set:    set SR-IOV eswitch mode (under pf->lock)
  * @sriov_enable: app-specific sriov initialisation
  * @sriov_disable: app-specific sriov clean-up
- * @repr_get:	get representor netdev
+ * @dev_get:	get representor or internal port representing netdev
  */
 struct nfp_app_type {
 	enum nfp_app_id id;
@@ -143,7 +142,8 @@ struct nfp_app_type {
 
 	enum devlink_eswitch_mode (*eswitch_mode_get)(struct nfp_app *app);
 	int (*eswitch_mode_set)(struct nfp_app *app, u16 mode);
-	struct net_device *(*repr_get)(struct nfp_app *app, u32 id);
+	struct net_device *(*dev_get)(struct nfp_app *app, u32 id,
+				      bool *redir_egress);
 };
 
 /**
@@ -397,12 +397,14 @@ static inline void nfp_app_sriov_disable(struct nfp_app *app)
 		app->type->sriov_disable(app);
 }
 
-static inline struct net_device *nfp_app_repr_get(struct nfp_app *app, u32 id)
+static inline
+struct net_device *nfp_app_dev_get(struct nfp_app *app, u32 id,
+				   bool *redir_egress)
 {
-	if (unlikely(!app || !app->type->repr_get))
+	if (unlikely(!app || !app->type->dev_get))
 		return NULL;
 
-	return app->type->repr_get(app, id);
+	return app->type->dev_get(app, id, redir_egress);
 }
 
 struct nfp_app *nfp_app_from_netdev(struct net_device *netdev);
@@ -432,5 +434,7 @@ int nfp_app_nic_vnic_alloc(struct nfp_app *app, struct nfp_net *nn,
 			   unsigned int id);
 int nfp_app_nic_vnic_init_phy_port(struct nfp_pf *pf, struct nfp_app *app,
 				   struct nfp_net *nn, unsigned int id);
+
+struct devlink_port *nfp_devlink_get_devlink_port(struct net_device *netdev);
 
 #endif

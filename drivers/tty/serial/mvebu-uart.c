@@ -648,6 +648,14 @@ static void wait_for_xmitr(struct uart_port *port)
 				  (val & STAT_TX_RDY(port)), 1, 10000);
 }
 
+static void wait_for_xmite(struct uart_port *port)
+{
+	u32 val;
+
+	readl_poll_timeout_atomic(port->membase + UART_STAT, val,
+				  (val & STAT_TX_EMP), 1, 10000);
+}
+
 static void mvebu_uart_console_putchar(struct uart_port *port, int ch)
 {
 	wait_for_xmitr(port);
@@ -675,7 +683,7 @@ static void mvebu_uart_console_write(struct console *co, const char *s,
 
 	uart_console_write(port, s, count, mvebu_uart_console_putchar);
 
-	wait_for_xmitr(port);
+	wait_for_xmite(port);
 
 	if (ier)
 		writel(ier, port->membase + UART_CTRL(port));
@@ -803,7 +811,7 @@ static int mvebu_uart_probe(struct platform_device *pdev)
 							   &pdev->dev);
 	struct uart_port *port;
 	struct mvebu_uart *mvuart;
-	int ret, id, irq;
+	int id, irq;
 
 	if (!reg) {
 		dev_err(&pdev->dev, "no registers defined\n");
@@ -848,7 +856,7 @@ static int mvebu_uart_probe(struct platform_device *pdev)
 
 	port->membase = devm_ioremap_resource(&pdev->dev, reg);
 	if (IS_ERR(port->membase))
-		return -PTR_ERR(port->membase);
+		return PTR_ERR(port->membase);
 
 	mvuart = devm_kzalloc(&pdev->dev, sizeof(struct mvebu_uart),
 			      GFP_KERNEL);
@@ -881,10 +889,8 @@ static int mvebu_uart_probe(struct platform_device *pdev)
 	if (platform_irq_count(pdev) == 1) {
 		/* Old bindings: no name on the single unamed UART0 IRQ */
 		irq = platform_get_irq(pdev, 0);
-		if (irq < 0) {
-			dev_err(&pdev->dev, "unable to get UART IRQ\n");
+		if (irq < 0)
 			return irq;
-		}
 
 		mvuart->irq[UART_IRQ_SUM] = irq;
 	} else {
@@ -894,18 +900,14 @@ static int mvebu_uart_probe(struct platform_device *pdev)
 		 * uart-sum of UART0 port.
 		 */
 		irq = platform_get_irq_byname(pdev, "uart-rx");
-		if (irq < 0) {
-			dev_err(&pdev->dev, "unable to get 'uart-rx' IRQ\n");
+		if (irq < 0)
 			return irq;
-		}
 
 		mvuart->irq[UART_RX_IRQ] = irq;
 
 		irq = platform_get_irq_byname(pdev, "uart-tx");
-		if (irq < 0) {
-			dev_err(&pdev->dev, "unable to get 'uart-tx' IRQ\n");
+		if (irq < 0)
 			return irq;
-		}
 
 		mvuart->irq[UART_TX_IRQ] = irq;
 	}
@@ -915,10 +917,7 @@ static int mvebu_uart_probe(struct platform_device *pdev)
 	udelay(1);
 	writel(0, port->membase + UART_CTRL(port));
 
-	ret = uart_add_one_port(&mvebu_uart_driver, port);
-	if (ret)
-		return ret;
-	return 0;
+	return uart_add_one_port(&mvebu_uart_driver, port);
 }
 
 static struct mvebu_uart_driver_data uart_std_driver_data = {

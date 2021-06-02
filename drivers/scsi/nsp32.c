@@ -1,19 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * NinjaSCSI-32Bi Cardbus, NinjaSCSI-32UDE PCI/CardBus SCSI driver
  * Copyright (C) 2001, 2002, 2003
  *      YOKOTA Hiroshi <yokota@netlab.is.tsukuba.ac.jp>
  *      GOTO Masanori <gotom@debian.or.jp>, <gotom@debian.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  *
  * Revision History:
  *   1.0: Initial Release.
@@ -319,6 +309,7 @@ static struct scsi_host_template nsp32_template = {
 
 #define NSP32_DEBUG_BUF_LEN		100
 
+__printf(4, 5)
 static void nsp32_message(const char *func, int line, char *type, char *fmt, ...)
 {
 	va_list args;
@@ -590,7 +581,6 @@ static int nsp32_selection_autoscsi(struct scsi_cmnd *SCpnt)
 	int		status;
 	unsigned short	command	= 0;
 	unsigned int	msgout  = 0;
-	unsigned short	execph;
 	int		i;
 
 	nsp32_dbg(NSP32_DEBUG_AUTOSCSI, "in");
@@ -614,7 +604,7 @@ static int nsp32_selection_autoscsi(struct scsi_cmnd *SCpnt)
 	/*
 	 * clear execph
 	 */
-	execph = nsp32_read2(base, SCSI_EXECUTE_PHASE);
+	nsp32_read2(base, SCSI_EXECUTE_PHASE);
 
 	/*
 	 * clear FIFO counter to set CDBs
@@ -886,7 +876,7 @@ static int nsp32_setup_sg_table(struct scsi_cmnd *SCpnt)
 
 			if (le32_to_cpu(sgt[i].len) > 0x10000) {
 				nsp32_msg(KERN_ERR,
-					"can't transfer over 64KB at a time, size=0x%lx", le32_to_cpu(sgt[i].len));
+					"can't transfer over 64KB at a time, size=0x%x", le32_to_cpu(sgt[i].len));
 				return FALSE;
 			}
 			nsp32_dbg(NSP32_DEBUG_SGLIST,
@@ -945,7 +935,7 @@ static int nsp32_queuecommand_lck(struct scsi_cmnd *SCpnt, void (*done)(struct s
 
 	SCpnt->scsi_done     = done;
 	data->CurrentSC      = SCpnt;
-	SCpnt->SCp.Status    = CHECK_CONDITION;
+	SCpnt->SCp.Status    = SAM_STAT_CHECK_CONDITION;
 	SCpnt->SCp.Message   = 0;
 	scsi_set_resid(SCpnt, scsi_bufflen(SCpnt));
 
@@ -1257,7 +1247,7 @@ static irqreturn_t do_nsp32_isr(int irq, void *dev_id)
 				 *   ---> AutoSCSI with MSGOUTreg is processed.
 				 */
 				data->msgout_len = 0;
-			};
+			}
 
 			nsp32_dbg(NSP32_DEBUG_INTR, "MsgOut phase processed");
 		}
@@ -1552,7 +1542,7 @@ static void nsp32_scsi_done(struct scsi_cmnd *SCpnt)
  * with ACK reply when below condition is matched:
  *	MsgIn 00: Command Complete.
  *	MsgIn 02: Save Data Pointer.
- *	MsgIn 04: Diconnect.
+ *	MsgIn 04: Disconnect.
  * In other case, unexpected BUSFREE is detected.
  */
 static int nsp32_busfree_occur(struct scsi_cmnd *SCpnt, unsigned short execph)
@@ -1790,8 +1780,6 @@ static void nsp32_msgout_occur(struct scsi_cmnd *SCpnt)
 {
 	nsp32_hw_data *data = (nsp32_hw_data *)SCpnt->device->host->hostdata;
 	unsigned int base   = SCpnt->device->host->io_port;
-	//unsigned short command;
-	long new_sgtp;
 	int i;
 	
 	nsp32_dbg(NSP32_DEBUG_MSGOUTOCCUR,
@@ -1804,14 +1792,6 @@ static void nsp32_msgout_occur(struct scsi_cmnd *SCpnt)
 	if (data->msgout_len == 0) {
 		nsp32_build_nop(SCpnt);
 	}
-
-	/*
-	 * Set SGTP ADDR current entry for restarting AUTOSCSI, 
-	 * because SGTP is incremented next point.
-	 * There is few statement in the specification...
-	 */
- 	new_sgtp = data->cur_lunt->sglun_paddr + 
-		   (data->cur_lunt->cur_entry * sizeof(nsp32_sgtable));
 
 	/*
 	 * send messages
@@ -1849,7 +1829,7 @@ static void nsp32_msgout_occur(struct scsi_cmnd *SCpnt)
 
 		nsp32_dbg(NSP32_DEBUG_MSGOUTOCCUR, "bus: 0x%x\n",
 			  nsp32_read1(base, SCSI_BUS_MONITOR));
-	};
+	}
 
 	data->msgout_len = 0;
 
@@ -2229,16 +2209,11 @@ static void nsp32_analyze_sdtr(struct scsi_cmnd *SCpnt)
 {
 	nsp32_hw_data   *data = (nsp32_hw_data *)SCpnt->device->host->hostdata;
 	nsp32_target     *target     = data->cur_target;
-	nsp32_sync_table *synct;
 	unsigned char     get_period = data->msginbuf[3];
 	unsigned char     get_offset = data->msginbuf[4];
 	int               entry;
-	int               syncnum;
 
 	nsp32_dbg(NSP32_DEBUG_MSGINOCCUR, "enter");
-
-	synct   = data->synct;
-	syncnum = data->syncnum;
 
 	/*
 	 * If this inititor sent the SDTR message, then target responds SDTR,
@@ -2441,7 +2416,6 @@ static void nsp32_set_sync_entry(nsp32_hw_data *data,
 
 	period      = data->synct[entry].period_num;
 	ackwidth    = data->synct[entry].ackwidth;
-	offset      = offset;
 	sample_rate = data->synct[entry].sample_rate;
 
 	target->syncreg    = TO_SYNCREG(period, offset);
@@ -2742,7 +2716,7 @@ static int nsp32_detect(struct pci_dev *pdev)
 	res = request_region(host->io_port, host->n_io_port, "nsp32");
 	if (res == NULL) {
 		nsp32_msg(KERN_ERR, 
-			  "I/O region 0x%lx+0x%lx is already used",
+			  "I/O region 0x%x+0x%x is already used",
 			  data->BaseAddress, data->NumAddress);
 		goto free_irq;
         }
@@ -2848,8 +2822,8 @@ static int nsp32_eh_abort(struct scsi_cmnd *SCpnt)
 static void nsp32_do_bus_reset(nsp32_hw_data *data)
 {
 	unsigned int   base = data->BaseAddress;
-	unsigned short intrdat;
 	int i;
+	unsigned short __maybe_unused intrdat;
 
 	nsp32_dbg(NSP32_DEBUG_BUSRESET, "in");
 
@@ -2919,7 +2893,8 @@ static int nsp32_getprom_param(nsp32_hw_data *data)
 {
 	int vendor = data->pci_devid->vendor;
 	int device = data->pci_devid->device;
-	int ret, val, i;
+	int ret, i;
+	int __maybe_unused val;
 
 	/*
 	 * EEPROM checking.
@@ -3289,7 +3264,8 @@ static int nsp32_suspend(struct pci_dev *pdev, pm_message_t state)
 {
 	struct Scsi_Host *host = pci_get_drvdata(pdev);
 
-	nsp32_msg(KERN_INFO, "pci-suspend: pdev=0x%p, state=%ld, slot=%s, host=0x%p", pdev, state, pci_name(pdev), host);
+	nsp32_msg(KERN_INFO, "pci-suspend: pdev=0x%p, state.event=%x, slot=%s, host=0x%p",
+		  pdev, state.event, pci_name(pdev), host);
 
 	pci_save_state     (pdev);
 	pci_disable_device (pdev);

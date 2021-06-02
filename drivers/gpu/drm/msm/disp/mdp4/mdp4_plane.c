@@ -1,19 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+
+#include <drm/drm_atomic.h>
+#include <drm/drm_damage_helper.h>
+#include <drm/drm_fourcc.h>
 
 #include "mdp4_kms.h"
 
@@ -114,23 +107,24 @@ static void mdp4_plane_cleanup_fb(struct drm_plane *plane,
 
 
 static int mdp4_plane_atomic_check(struct drm_plane *plane,
-		struct drm_plane_state *state)
+		struct drm_atomic_state *state)
 {
 	return 0;
 }
 
 static void mdp4_plane_atomic_update(struct drm_plane *plane,
-				     struct drm_plane_state *old_state)
+				     struct drm_atomic_state *state)
 {
-	struct drm_plane_state *state = plane->state;
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
+									   plane);
 	int ret;
 
 	ret = mdp4_plane_mode_set(plane,
-			state->crtc, state->fb,
-			state->crtc_x, state->crtc_y,
-			state->crtc_w, state->crtc_h,
-			state->src_x,  state->src_y,
-			state->src_w, state->src_h);
+			new_state->crtc, new_state->fb,
+			new_state->crtc_x, new_state->crtc_y,
+			new_state->crtc_w, new_state->crtc_h,
+			new_state->src_x,  new_state->src_y,
+			new_state->src_w, new_state->src_h);
 	/* atomic_check should have ensured that this doesn't fail */
 	WARN_ON(ret < 0);
 }
@@ -390,6 +384,8 @@ struct drm_plane *mdp4_plane_init(struct drm_device *dev,
 	drm_plane_helper_add(plane, &mdp4_plane_helper_funcs);
 
 	mdp4_plane_install_properties(plane, &plane->base);
+
+	drm_plane_enable_fb_damage_clips(plane);
 
 	return plane;
 

@@ -38,7 +38,7 @@
 			device_type = "cpu";
 			compatible = "arm,cortex-a7";
 			reg = <0x101>;
-			clock-frequency = <1000000000>;
+			clocks = <&clock CLK_KFC_CLK>;
 			clock-frequency = <1400000000>;
 			cci-control-port = <&cci_control0>;
 			operating-points-v2 = <&cluster_a7_opp_table>;

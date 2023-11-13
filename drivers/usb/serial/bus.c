@@ -74,7 +74,7 @@ err_autopm_put:
 	return retval;
 }
 
-static int usb_serial_device_remove(struct device *dev)
+static void usb_serial_device_remove(struct device *dev)
 {
 	struct usb_serial_port *port = to_usb_serial_port(dev);
 	struct usb_serial_driver *driver;
@@ -101,8 +101,6 @@ static int usb_serial_device_remove(struct device *dev)
 
 	if (!autopm_err)
 		usb_autopm_put_interface(port->serial->interface);
-
-	return 0;
 }
 
 static ssize_t new_id_store(struct device_driver *driver,
@@ -146,7 +144,7 @@ static void free_dynids(struct usb_serial_driver *drv)
 	spin_unlock(&drv->dynids.lock);
 }
 
-struct bus_type usb_serial_bus_type = {
+const struct bus_type usb_serial_bus_type = {
 	.name =		"usb-serial",
 	.match =	usb_serial_device_match,
 	.probe =	usb_serial_device_probe,

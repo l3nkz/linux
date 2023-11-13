@@ -159,8 +159,6 @@ static int bcm2835_pwm_probe(struct platform_device *pdev)
 	pc->chip.dev = &pdev->dev;
 	pc->chip.ops = &bcm2835_pwm_ops;
 	pc->chip.npwm = 2;
-	pc->chip.of_xlate = of_pwm_xlate_with_flags;
-	pc->chip.of_pwm_n_cells = 3;
 
 	platform_set_drvdata(pdev, pc);
 
@@ -175,15 +173,13 @@ add_fail:
 	return ret;
 }
 
-static int bcm2835_pwm_remove(struct platform_device *pdev)
+static void bcm2835_pwm_remove(struct platform_device *pdev)
 {
 	struct bcm2835_pwm *pc = platform_get_drvdata(pdev);
 
 	pwmchip_remove(&pc->chip);
 
 	clk_disable_unprepare(pc->clk);
-
-	return 0;
 }
 
 static const struct of_device_id bcm2835_pwm_of_match[] = {
@@ -198,7 +194,7 @@ static struct platform_driver bcm2835_pwm_driver = {
 		.of_match_table = bcm2835_pwm_of_match,
 	},
 	.probe = bcm2835_pwm_probe,
-	.remove = bcm2835_pwm_remove,
+	.remove_new = bcm2835_pwm_remove,
 };
 module_platform_driver(bcm2835_pwm_driver);
 

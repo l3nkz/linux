@@ -27,6 +27,7 @@
 #include <linux/uaccess.h>
 #include <linux/cpu.h>
 #include <linux/entry-common.h>
+#include <asm/asm-extable.h>
 #include <asm/fpu/api.h>
 #include <asm/vtime.h>
 #include "entry.h"
@@ -36,7 +37,7 @@ static inline void __user *get_trap_ip(struct pt_regs *regs)
 	unsigned long address;
 
 	if (regs->int_code & 0x200)
-		address = *(unsigned long *)(current->thread.trap_tdb + 24);
+		address = current->thread.trap_tdb.data[3];
 	else
 		address = regs->psw.addr;
 	return (void __user *) (address - (regs->int_code >> 16));
@@ -53,9 +54,7 @@ void do_report_trap(struct pt_regs *regs, int si_signo, int si_code, char *str)
 		force_sig_fault(si_signo, si_code, get_trap_ip(regs));
 		report_user_fault(regs, si_signo, 0);
         } else {
-                const struct exception_table_entry *fixup;
-		fixup = s390_search_extables(regs->psw.addr);
-		if (!fixup || !ex_handle(fixup, regs))
+		if (!fixup_exception(regs))
 			die(regs, str);
         }
 }
@@ -84,7 +83,7 @@ static void default_trap_handler(struct pt_regs *regs)
 {
 	if (user_mode(regs)) {
 		report_user_fault(regs, SIGSEGV, 0);
-		do_exit(SIGSEGV);
+		force_exit_sig(SIGSEGV);
 	} else
 		die(regs, "Unknown program exception");
 }
@@ -142,10 +141,10 @@ static inline void do_fp_trap(struct pt_regs *regs, __u32 fpc)
 	do_trap(regs, SIGFPE, si_code, "floating point exception");
 }
 
-static void translation_exception(struct pt_regs *regs)
+static void translation_specification_exception(struct pt_regs *regs)
 {
 	/* May never happen. */
-	panic("Translation exception");
+	panic("Translation-Specification Exception");
 }
 
 static void illegal_op(struct pt_regs *regs)
@@ -244,16 +243,12 @@ static void space_switch_exception(struct pt_regs *regs)
 
 static void monitor_event_exception(struct pt_regs *regs)
 {
-	const struct exception_table_entry *fixup;
-
 	if (user_mode(regs))
 		return;
 
 	switch (report_bug(regs->psw.addr - (regs->int_code >> 16), regs)) {
 	case BUG_TRAP_TYPE_NONE:
-		fixup = s390_search_extables(regs->psw.addr);
-		if (fixup)
-			ex_handle(fixup, regs);
+		fixup_exception(regs);
 		break;
 	case BUG_TRAP_TYPE_WARN:
 		break;
@@ -277,6 +272,8 @@ static void __init test_monitor_call(void)
 {
 	int val = 1;
 
+	if (!IS_ENABLED(CONFIG_BUG))
+		return;
 	asm volatile(
 		"	mc	0,0\n"
 		"0:	xgr	%0,%0\n"
@@ -289,7 +286,6 @@ static void __init test_monitor_call(void)
 
 void __init trap_init(void)
 {
-	sort_extable(__start_dma_ex_table, __stop_dma_ex_table);
 	local_mcck_enable();
 	test_monitor_call();
 }
@@ -298,27 +294,26 @@ static void (*pgm_check_table[128])(struct pt_regs *regs);
 
 void noinstr __do_pgm_check(struct pt_regs *regs)
 {
-	unsigned long last_break = S390_lowcore.breaking_event_addr;
-	unsigned int trapnr, syscall_redirect = 0;
+	unsigned int trapnr;
 	irqentry_state_t state;
 
-	add_random_kstack_offset();
-	regs->int_code = *(u32 *)&S390_lowcore.pgm_ilc;
+	regs->int_code = S390_lowcore.pgm_int_code;
 	regs->int_parm_long = S390_lowcore.trans_exc_code;
 
 	state = irqentry_enter(regs);
 
 	if (user_mode(regs)) {
 		update_timer_sys();
-		if (last_break < 4096)
-			last_break = 1;
-		current->thread.last_break = last_break;
-		regs->args[0] = last_break;
+		if (!static_branch_likely(&cpu_has_bear)) {
+			if (regs->last_break < 4096)
+				regs->last_break = 1;
+		}
+		current->thread.last_break = regs->last_break;
 	}
 
 	if (S390_lowcore.pgm_code & 0x0200) {
 		/* transaction abort */
-		memcpy(&current->thread.trap_tdb, &S390_lowcore.pgm_tdb, 256);
+		current->thread.trap_tdb = S390_lowcore.pgm_tdb;
 	}
 
 	if (S390_lowcore.pgm_code & PGM_INT_CODE_PER) {
@@ -327,7 +322,7 @@ void noinstr __do_pgm_check(struct pt_regs *regs)
 
 			set_thread_flag(TIF_PER_TRAP);
 			ev->address = S390_lowcore.per_address;
-			ev->cause = *(u16 *)&S390_lowcore.per_code;
+			ev->cause = S390_lowcore.per_code_combined;
 			ev->paid = S390_lowcore.per_access_id;
 		} else {
 			/* PER event in kernel is kprobes */
@@ -344,18 +339,9 @@ void noinstr __do_pgm_check(struct pt_regs *regs)
 	trapnr = regs->int_code & PGM_INT_CODE_MASK;
 	if (trapnr)
 		pgm_check_table[trapnr](regs);
-	syscall_redirect = user_mode(regs) && test_pt_regs_flag(regs, PIF_SYSCALL);
 out:
 	local_irq_disable();
 	irqentry_exit(regs, state);
-
-	if (syscall_redirect) {
-		enter_from_user_mode(regs);
-		local_irq_enable();
-		regs->orig_gpr2 = regs->gprs[2];
-		do_syscall(regs);
-		exit_to_user_mode();
-	}
 }
 
 /*
@@ -382,7 +368,7 @@ static void (*pgm_check_table[128])(struct pt_regs *regs) = {
 	[0x0f]		= hfp_divide_exception,
 	[0x10]		= do_dat_exception,
 	[0x11]		= do_dat_exception,
-	[0x12]		= translation_exception,
+	[0x12]		= translation_specification_exception,
 	[0x13]		= special_op_exception,
 	[0x14]		= default_trap_handler,
 	[0x15]		= operand_exception,

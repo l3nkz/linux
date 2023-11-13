@@ -4,6 +4,8 @@
 
 #include <asm/bug.h>
 #include <asm/book3s/32/mmu-hash.h>
+#include <asm/mmu.h>
+#include <asm/synch.h>
 
 #ifndef __ASSEMBLY__
 
@@ -11,145 +13,159 @@
 
 #include <linux/sched.h>
 
-static inline void kuap_update_sr(u32 sr, u32 addr, u32 end)
+#define KUAP_NONE	(~0UL)
+
+static __always_inline void kuap_lock_one(unsigned long addr)
 {
-	addr &= 0xf0000000;	/* align addr to start of segment */
-	barrier();	/* make sure thread.kuap is updated before playing with SRs */
-	while (addr < end) {
-		mtsr(sr, addr);
-		sr += 0x111;		/* next VSID */
-		sr &= 0xf0ffffff;	/* clear VSID overflow */
-		addr += 0x10000000;	/* address of next segment */
-	}
+	mtsr(mfsr(addr) | SR_KS, addr);
 	isync();	/* Context sync required after mtsr() */
 }
 
-static inline void kuap_save_and_lock(struct pt_regs *regs)
+static __always_inline void kuap_unlock_one(unsigned long addr)
+{
+	mtsr(mfsr(addr) & ~SR_KS, addr);
+	isync();	/* Context sync required after mtsr() */
+}
+
+static __always_inline void uaccess_begin_32s(unsigned long addr)
+{
+	unsigned long tmp;
+
+	asm volatile(ASM_MMU_FTR_IFSET(
+		"mfsrin %0, %1;"
+		"rlwinm %0, %0, 0, %2;"
+		"mtsrin %0, %1;"
+		"isync", "", %3)
+		: "=&r"(tmp)
+		: "r"(addr), "i"(~SR_KS), "i"(MMU_FTR_KUAP)
+		: "memory");
+}
+
+static __always_inline void uaccess_end_32s(unsigned long addr)
+{
+	unsigned long tmp;
+
+	asm volatile(ASM_MMU_FTR_IFSET(
+		"mfsrin %0, %1;"
+		"oris %0, %0, %2;"
+		"mtsrin %0, %1;"
+		"isync", "", %3)
+		: "=&r"(tmp)
+		: "r"(addr), "i"(SR_KS >> 16), "i"(MMU_FTR_KUAP)
+		: "memory");
+}
+
+static __always_inline void __kuap_save_and_lock(struct pt_regs *regs)
 {
 	unsigned long kuap = current->thread.kuap;
-	u32 addr = kuap & 0xf0000000;
-	u32 end = kuap << 28;
 
 	regs->kuap = kuap;
-	if (unlikely(!kuap))
+	if (unlikely(kuap == KUAP_NONE))
 		return;
 
-	current->thread.kuap = 0;
-	kuap_update_sr(mfsr(addr) | SR_KS, addr, end);	/* Set Ks */
+	current->thread.kuap = KUAP_NONE;
+	kuap_lock_one(kuap);
 }
+#define __kuap_save_and_lock __kuap_save_and_lock
 
-static inline void kuap_user_restore(struct pt_regs *regs)
+static __always_inline void kuap_user_restore(struct pt_regs *regs)
 {
 }
 
-static inline void kuap_kernel_restore(struct pt_regs *regs, unsigned long kuap)
+static __always_inline void __kuap_kernel_restore(struct pt_regs *regs, unsigned long kuap)
 {
-	u32 addr = regs->kuap & 0xf0000000;
-	u32 end = regs->kuap << 28;
+	if (unlikely(kuap != KUAP_NONE)) {
+		current->thread.kuap = KUAP_NONE;
+		kuap_lock_one(kuap);
+	}
+
+	if (likely(regs->kuap == KUAP_NONE))
+		return;
 
 	current->thread.kuap = regs->kuap;
 
-	if (unlikely(regs->kuap == kuap))
-		return;
-
-	kuap_update_sr(mfsr(addr) & ~SR_KS, addr, end);	/* Clear Ks */
+	kuap_unlock_one(regs->kuap);
 }
 
-static inline unsigned long kuap_get_and_assert_locked(void)
+static __always_inline unsigned long __kuap_get_and_assert_locked(void)
 {
 	unsigned long kuap = current->thread.kuap;
 
-	WARN_ON_ONCE(IS_ENABLED(CONFIG_PPC_KUAP_DEBUG) && kuap != 0);
+	WARN_ON_ONCE(IS_ENABLED(CONFIG_PPC_KUAP_DEBUG) && kuap != KUAP_NONE);
 
 	return kuap;
 }
-
-static inline void kuap_assert_locked(void)
-{
-	kuap_get_and_assert_locked();
-}
+#define __kuap_get_and_assert_locked __kuap_get_and_assert_locked
 
 static __always_inline void allow_user_access(void __user *to, const void __user *from,
 					      u32 size, unsigned long dir)
 {
-	u32 addr, end;
-
 	BUILD_BUG_ON(!__builtin_constant_p(dir));
-	BUILD_BUG_ON(dir & ~KUAP_READ_WRITE);
 
 	if (!(dir & KUAP_WRITE))
 		return;
 
-	addr = (__force u32)to;
-
-	if (unlikely(addr >= TASK_SIZE || !size))
-		return;
-
-	end = min(addr + size, TASK_SIZE);
-
-	current->thread.kuap = (addr & 0xf0000000) | ((((end - 1) >> 28) + 1) & 0xf);
-	kuap_update_sr(mfsr(addr) & ~SR_KS, addr, end);	/* Clear Ks */
+	current->thread.kuap = (__force u32)to;
+	uaccess_begin_32s((__force u32)to);
 }
 
-static __always_inline void prevent_user_access(void __user *to, const void __user *from,
-						u32 size, unsigned long dir)
+static __always_inline void prevent_user_access(unsigned long dir)
 {
-	u32 addr, end;
+	u32 kuap = current->thread.kuap;
 
 	BUILD_BUG_ON(!__builtin_constant_p(dir));
 
-	if (dir & KUAP_CURRENT_WRITE) {
-		u32 kuap = current->thread.kuap;
-
-		if (unlikely(!kuap))
-			return;
-
-		addr = kuap & 0xf0000000;
-		end = kuap << 28;
-	} else if (dir & KUAP_WRITE) {
-		addr = (__force u32)to;
-		end = min(addr + size, TASK_SIZE);
-
-		if (unlikely(addr >= TASK_SIZE || !size))
-			return;
-	} else {
+	if (!(dir & KUAP_WRITE))
 		return;
-	}
 
-	current->thread.kuap = 0;
-	kuap_update_sr(mfsr(addr) | SR_KS, addr, end);	/* set Ks */
+	current->thread.kuap = KUAP_NONE;
+	uaccess_end_32s(kuap);
 }
 
-static inline unsigned long prevent_user_access_return(void)
+static __always_inline unsigned long prevent_user_access_return(void)
 {
 	unsigned long flags = current->thread.kuap;
-	unsigned long addr = flags & 0xf0000000;
-	unsigned long end = flags << 28;
-	void __user *to = (__force void __user *)addr;
 
-	if (flags)
-		prevent_user_access(to, to, end - addr, KUAP_READ_WRITE);
+	if (flags != KUAP_NONE) {
+		current->thread.kuap = KUAP_NONE;
+		uaccess_end_32s(flags);
+	}
 
 	return flags;
 }
 
-static inline void restore_user_access(unsigned long flags)
+static __always_inline void restore_user_access(unsigned long flags)
 {
-	unsigned long addr = flags & 0xf0000000;
-	unsigned long end = flags << 28;
-	void __user *to = (__force void __user *)addr;
-
-	if (flags)
-		allow_user_access(to, to, end - addr, KUAP_READ_WRITE);
+	if (flags != KUAP_NONE) {
+		current->thread.kuap = flags;
+		uaccess_begin_32s(flags);
+	}
 }
 
-static inline bool
-bad_kuap_fault(struct pt_regs *regs, unsigned long address, bool is_write)
+static __always_inline bool
+__bad_kuap_fault(struct pt_regs *regs, unsigned long address, bool is_write)
 {
-	unsigned long begin = regs->kuap & 0xf0000000;
-	unsigned long end = regs->kuap << 28;
+	unsigned long kuap = regs->kuap;
 
-	return is_write && (address < begin || address >= end);
+	if (!is_write)
+		return false;
+	if (kuap == KUAP_NONE)
+		return true;
+
+	/*
+	 * If faulting address doesn't match unlocked segment, change segment.
+	 * In case of unaligned store crossing two segments, emulate store.
+	 */
+	if ((kuap ^ address) & 0xf0000000) {
+		if (!(kuap & 0x0fffffff) && address > kuap - 4 && fix_alignment(regs)) {
+			regs_add_return_ip(regs, 4);
+			emulate_single_step(regs);
+		} else {
+			regs->kuap = address;
+		}
+	}
+
+	return false;
 }
 
 #endif /* CONFIG_PPC_KUAP */

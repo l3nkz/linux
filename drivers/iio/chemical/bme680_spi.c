@@ -4,9 +4,8 @@
  *
  * Copyright (C) 2018 Himanshu Jha <himanshujha199640@gmail.com>
  */
-#include <linux/acpi.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/spi/spi.h>
 
@@ -145,12 +144,6 @@ static const struct spi_device_id bme680_spi_id[] = {
 };
 MODULE_DEVICE_TABLE(spi, bme680_spi_id);
 
-static const struct acpi_device_id bme680_acpi_match[] = {
-	{"BME0680", 0},
-	{},
-};
-MODULE_DEVICE_TABLE(acpi, bme680_acpi_match);
-
 static const struct of_device_id bme680_of_spi_match[] = {
 	{ .compatible = "bosch,bme680", },
 	{},
@@ -160,7 +153,6 @@ MODULE_DEVICE_TABLE(of, bme680_of_spi_match);
 static struct spi_driver bme680_spi_driver = {
 	.driver = {
 		.name			= "bme680_spi",
-		.acpi_match_table	= ACPI_PTR(bme680_acpi_match),
 		.of_match_table		= bme680_of_spi_match,
 	},
 	.probe = bme680_spi_probe,
@@ -171,3 +163,4 @@ module_spi_driver(bme680_spi_driver);
 MODULE_AUTHOR("Himanshu Jha <himanshujha199640@gmail.com>");
 MODULE_DESCRIPTION("Bosch BME680 SPI driver");
 MODULE_LICENSE("GPL v2");
+MODULE_IMPORT_NS(IIO_BME680);

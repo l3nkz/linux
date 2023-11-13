@@ -16,6 +16,7 @@
 #include <asm/bootinfo.h>
 #include <asm/idle.h>
 #include <asm/reboot.h>
+#include <asm/bug.h>
 
 #include <loongson.h>
 #include <boot_param.h>
@@ -126,11 +127,12 @@ static void loongson_kexec_shutdown(void)
 	for_each_possible_cpu(cpu)
 		if (!cpu_online(cpu))
 			cpu_device_up(get_cpu_device(cpu));
+
+	secondary_kexec_args[0] = TO_UNCAC(0x3ff01000);
 #endif
 	kexec_args[0] = kexec_argc;
 	kexec_args[1] = fw_arg1;
 	kexec_args[2] = fw_arg2;
-	secondary_kexec_args[0] = TO_UNCAC(0x3ff01000);
 	memcpy((void *)fw_arg1, kexec_argv, KEXEC_ARGV_SIZE);
 	memcpy((void *)fw_arg2, kexec_envp, KEXEC_ENVP_SIZE);
 }
@@ -141,7 +143,9 @@ static void loongson_crash_shutdown(struct pt_regs *regs)
 	kexec_args[0] = kdump_argc;
 	kexec_args[1] = fw_arg1;
 	kexec_args[2] = fw_arg2;
+#ifdef CONFIG_SMP
 	secondary_kexec_args[0] = TO_UNCAC(0x3ff01000);
+#endif
 	memcpy((void *)fw_arg1, kdump_argv, KEXEC_ARGV_SIZE);
 	memcpy((void *)fw_arg2, kexec_envp, KEXEC_ENVP_SIZE);
 }
@@ -156,8 +160,17 @@ static int __init mips_reboot_setup(void)
 
 #ifdef CONFIG_KEXEC
 	kexec_argv = kmalloc(KEXEC_ARGV_SIZE, GFP_KERNEL);
+	if (WARN_ON(!kexec_argv))
+		return -ENOMEM;
+
 	kdump_argv = kmalloc(KEXEC_ARGV_SIZE, GFP_KERNEL);
+	if (WARN_ON(!kdump_argv))
+		return -ENOMEM;
+
 	kexec_envp = kmalloc(KEXEC_ENVP_SIZE, GFP_KERNEL);
+	if (WARN_ON(!kexec_envp))
+		return -ENOMEM;
+
 	fw_arg1 = KEXEC_ARGV_ADDR;
 	memcpy(kexec_envp, (void *)fw_arg2, KEXEC_ENVP_SIZE);
 

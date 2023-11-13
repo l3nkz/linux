@@ -98,7 +98,7 @@ static int mixart_set_pipe_state(struct mixart_mgr *mgr,
 
 	memset(&group_state, 0, sizeof(group_state));
 	group_state.pipe_count = 1;
-	group_state.pipe_uid[0] = pipe->group_uid;
+	group_state.pipe_uid = pipe->group_uid;
 
 	if(start)
 		request.message_id = MSG_STREAM_START_STREAM_GRP_PACKET;
@@ -185,7 +185,7 @@ static int mixart_set_clock(struct mixart_mgr *mgr,
 	clock_properties.clock_mode = CM_STANDALONE;
 	clock_properties.frequency = rate;
 	clock_properties.nb_callers = 1; /* only one entry in uid_caller ! */
-	clock_properties.uid_caller[0] = pipe->group_uid;
+	clock_properties.uid_caller = pipe->group_uid;
 
 	dev_dbg(&mgr->pci->dev, "mixart_set_clock to %d kHz\n", rate);
 
@@ -565,8 +565,8 @@ static int mixart_set_format(struct mixart_stream *stream, snd_pcm_format_t form
 
 	stream_param.pipe_count = 1;      /* set to 1 */
 	stream_param.stream_count = 1;    /* set to 1 */
-	stream_param.stream_desc[0].uid_pipe = stream->pipe->group_uid;
-	stream_param.stream_desc[0].stream_idx = stream->substream->number;
+	stream_param.stream_desc.uid_pipe = stream->pipe->group_uid;
+	stream_param.stream_desc.stream_idx = stream->substream->number;
 
 	request.message_id = MSG_STREAM_SET_INPUT_STAGE_PARAM;
 	request.uid = (struct mixart_uid){0,0};
@@ -954,9 +954,10 @@ static int snd_mixart_pcm_analog(struct snd_mixart *chip)
 	char name[32];
 
 	sprintf(name, "miXart analog %d", chip->chip_idx);
-	if ((err = snd_pcm_new(chip->card, name, MIXART_PCM_ANALOG,
-			       MIXART_PLAYBACK_STREAMS,
-			       MIXART_CAPTURE_STREAMS, &pcm)) < 0) {
+	err = snd_pcm_new(chip->card, name, MIXART_PCM_ANALOG,
+			  MIXART_PLAYBACK_STREAMS,
+			  MIXART_CAPTURE_STREAMS, &pcm);
+	if (err < 0) {
 		dev_err(chip->card->dev,
 			"cannot create the analog pcm %d\n", chip->chip_idx);
 		return err;
@@ -987,9 +988,10 @@ static int snd_mixart_pcm_digital(struct snd_mixart *chip)
 	char name[32];
 
 	sprintf(name, "miXart AES/EBU %d", chip->chip_idx);
-	if ((err = snd_pcm_new(chip->card, name, MIXART_PCM_DIGITAL,
-			       MIXART_PLAYBACK_STREAMS,
-			       MIXART_CAPTURE_STREAMS, &pcm)) < 0) {
+	err = snd_pcm_new(chip->card, name, MIXART_PCM_DIGITAL,
+			  MIXART_PLAYBACK_STREAMS,
+			  MIXART_CAPTURE_STREAMS, &pcm);
+	if (err < 0) {
 		dev_err(chip->card->dev,
 			"cannot create the digital pcm %d\n", chip->chip_idx);
 		return err;
@@ -1042,7 +1044,8 @@ static int snd_mixart_create(struct mixart_mgr *mgr, struct snd_card *card, int 
 	chip->mgr = mgr;
 	card->sync_irq = mgr->irq;
 
-	if ((err = snd_device_new(card, SNDRV_DEV_LOWLEVEL, chip, &ops)) < 0) {
+	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL, chip, &ops);
+	if (err < 0) {
 		snd_mixart_chip_free(chip);
 		return err;
 	}
@@ -1243,7 +1246,8 @@ static int snd_mixart_probe(struct pci_dev *pci,
 	}
 
 	/* enable PCI device */
-	if ((err = pci_enable_device(pci)) < 0)
+	err = pci_enable_device(pci);
+	if (err < 0)
 		return err;
 	pci_set_master(pci);
 
@@ -1267,7 +1271,8 @@ static int snd_mixart_probe(struct pci_dev *pci,
 	mgr->irq = -1;
 
 	/* resource assignment */
-	if ((err = pci_request_regions(pci, CARD_NAME)) < 0) {
+	err = pci_request_regions(pci, CARD_NAME);
+	if (err < 0) {
 		kfree(mgr);
 		pci_disable_device(pci);
 		return err;
@@ -1332,7 +1337,8 @@ static int snd_mixart_probe(struct pci_dev *pci,
 			"Digigram miXart at 0x%lx & 0x%lx, irq %i [PCM #%d]",
 			mgr->mem[0].phys, mgr->mem[1].phys, mgr->irq, i);
 
-		if ((err = snd_mixart_create(mgr, card, i)) < 0) {
+		err = snd_mixart_create(mgr, card, i);
+		if (err < 0) {
 			snd_card_free(card);
 			snd_mixart_free(mgr);
 			return err;
@@ -1343,7 +1349,8 @@ static int snd_mixart_probe(struct pci_dev *pci,
 			snd_mixart_proc_init(mgr->chip[i]);
 		}
 
-		if ((err = snd_card_register(card)) < 0) {
+		err = snd_card_register(card);
+		if (err < 0) {
 			snd_mixart_free(mgr);
 			return err;
 		}

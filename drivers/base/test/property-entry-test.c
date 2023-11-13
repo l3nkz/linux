@@ -32,11 +32,11 @@ static void pe_test_uints(struct kunit *test)
 
 	error = fwnode_property_read_u8(node, "prop-u8", &val_u8);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u8, 8);
+	KUNIT_EXPECT_EQ(test, val_u8, 8);
 
 	error = fwnode_property_read_u8_array(node, "prop-u8", array_u8, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u8[0], 8);
+	KUNIT_EXPECT_EQ(test, array_u8[0], 8);
 
 	error = fwnode_property_read_u8_array(node, "prop-u8", array_u8, 2);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -49,14 +49,14 @@ static void pe_test_uints(struct kunit *test)
 
 	error = fwnode_property_read_u16(node, "prop-u16", &val_u16);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u16, 16);
+	KUNIT_EXPECT_EQ(test, val_u16, 16);
 
 	error = fwnode_property_count_u16(node, "prop-u16");
 	KUNIT_EXPECT_EQ(test, error, 1);
 
 	error = fwnode_property_read_u16_array(node, "prop-u16", array_u16, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u16[0], 16);
+	KUNIT_EXPECT_EQ(test, array_u16[0], 16);
 
 	error = fwnode_property_read_u16_array(node, "prop-u16", array_u16, 2);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -69,14 +69,14 @@ static void pe_test_uints(struct kunit *test)
 
 	error = fwnode_property_read_u32(node, "prop-u32", &val_u32);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u32, 32);
+	KUNIT_EXPECT_EQ(test, val_u32, 32);
 
 	error = fwnode_property_count_u32(node, "prop-u32");
 	KUNIT_EXPECT_EQ(test, error, 1);
 
 	error = fwnode_property_read_u32_array(node, "prop-u32", array_u32, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u32[0], 32);
+	KUNIT_EXPECT_EQ(test, array_u32[0], 32);
 
 	error = fwnode_property_read_u32_array(node, "prop-u32", array_u32, 2);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -89,14 +89,14 @@ static void pe_test_uints(struct kunit *test)
 
 	error = fwnode_property_read_u64(node, "prop-u64", &val_u64);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u64, 64);
+	KUNIT_EXPECT_EQ(test, val_u64, 64);
 
 	error = fwnode_property_count_u64(node, "prop-u64");
 	KUNIT_EXPECT_EQ(test, error, 1);
 
 	error = fwnode_property_read_u64_array(node, "prop-u64", array_u64, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u64[0], 64);
+	KUNIT_EXPECT_EQ(test, array_u64[0], 64);
 
 	error = fwnode_property_read_u64_array(node, "prop-u64", array_u64, 2);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -140,19 +140,19 @@ static void pe_test_uint_arrays(struct kunit *test)
 
 	error = fwnode_property_read_u8(node, "prop-u8", &val_u8);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u8, 8);
+	KUNIT_EXPECT_EQ(test, val_u8, 8);
 
 	error = fwnode_property_count_u8(node, "prop-u8");
 	KUNIT_EXPECT_EQ(test, error, 10);
 
 	error = fwnode_property_read_u8_array(node, "prop-u8", array_u8, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u8[0], 8);
+	KUNIT_EXPECT_EQ(test, array_u8[0], 8);
 
 	error = fwnode_property_read_u8_array(node, "prop-u8", array_u8, 2);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u8[0], 8);
-	KUNIT_EXPECT_EQ(test, (int)array_u8[1], 9);
+	KUNIT_EXPECT_EQ(test, array_u8[0], 8);
+	KUNIT_EXPECT_EQ(test, array_u8[1], 9);
 
 	error = fwnode_property_read_u8_array(node, "prop-u8", array_u8, 17);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -165,19 +165,19 @@ static void pe_test_uint_arrays(struct kunit *test)
 
 	error = fwnode_property_read_u16(node, "prop-u16", &val_u16);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u16, 16);
+	KUNIT_EXPECT_EQ(test, val_u16, 16);
 
 	error = fwnode_property_count_u16(node, "prop-u16");
 	KUNIT_EXPECT_EQ(test, error, 10);
 
 	error = fwnode_property_read_u16_array(node, "prop-u16", array_u16, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u16[0], 16);
+	KUNIT_EXPECT_EQ(test, array_u16[0], 16);
 
 	error = fwnode_property_read_u16_array(node, "prop-u16", array_u16, 2);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u16[0], 16);
-	KUNIT_EXPECT_EQ(test, (int)array_u16[1], 17);
+	KUNIT_EXPECT_EQ(test, array_u16[0], 16);
+	KUNIT_EXPECT_EQ(test, array_u16[1], 17);
 
 	error = fwnode_property_read_u16_array(node, "prop-u16", array_u16, 17);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -190,19 +190,19 @@ static void pe_test_uint_arrays(struct kunit *test)
 
 	error = fwnode_property_read_u32(node, "prop-u32", &val_u32);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u32, 32);
+	KUNIT_EXPECT_EQ(test, val_u32, 32);
 
 	error = fwnode_property_count_u32(node, "prop-u32");
 	KUNIT_EXPECT_EQ(test, error, 10);
 
 	error = fwnode_property_read_u32_array(node, "prop-u32", array_u32, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u32[0], 32);
+	KUNIT_EXPECT_EQ(test, array_u32[0], 32);
 
 	error = fwnode_property_read_u32_array(node, "prop-u32", array_u32, 2);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u32[0], 32);
-	KUNIT_EXPECT_EQ(test, (int)array_u32[1], 33);
+	KUNIT_EXPECT_EQ(test, array_u32[0], 32);
+	KUNIT_EXPECT_EQ(test, array_u32[1], 33);
 
 	error = fwnode_property_read_u32_array(node, "prop-u32", array_u32, 17);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -215,19 +215,19 @@ static void pe_test_uint_arrays(struct kunit *test)
 
 	error = fwnode_property_read_u64(node, "prop-u64", &val_u64);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)val_u64, 64);
+	KUNIT_EXPECT_EQ(test, val_u64, 64);
 
 	error = fwnode_property_count_u64(node, "prop-u64");
 	KUNIT_EXPECT_EQ(test, error, 10);
 
 	error = fwnode_property_read_u64_array(node, "prop-u64", array_u64, 1);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u64[0], 64);
+	KUNIT_EXPECT_EQ(test, array_u64[0], 64);
 
 	error = fwnode_property_read_u64_array(node, "prop-u64", array_u64, 2);
 	KUNIT_EXPECT_EQ(test, error, 0);
-	KUNIT_EXPECT_EQ(test, (int)array_u64[0], 64);
-	KUNIT_EXPECT_EQ(test, (int)array_u64[1], 65);
+	KUNIT_EXPECT_EQ(test, array_u64[0], 64);
+	KUNIT_EXPECT_EQ(test, array_u64[1], 65);
 
 	error = fwnode_property_read_u64_array(node, "prop-u64", array_u64, 17);
 	KUNIT_EXPECT_NE(test, error, 0);
@@ -358,13 +358,13 @@ static void pe_test_move_inline_u8(struct kunit *test)
 
 	KUNIT_EXPECT_TRUE(test, copy[0].is_inline);
 	data_ptr = (u8 *)&copy[0].value;
-	KUNIT_EXPECT_EQ(test, (int)data_ptr[0], 1);
-	KUNIT_EXPECT_EQ(test, (int)data_ptr[1], 2);
+	KUNIT_EXPECT_EQ(test, data_ptr[0], 1);
+	KUNIT_EXPECT_EQ(test, data_ptr[1], 2);
 
 	KUNIT_EXPECT_FALSE(test, copy[1].is_inline);
 	data_ptr = copy[1].pointer;
-	KUNIT_EXPECT_EQ(test, (int)data_ptr[0], 5);
-	KUNIT_EXPECT_EQ(test, (int)data_ptr[1], 6);
+	KUNIT_EXPECT_EQ(test, data_ptr[0], 5);
+	KUNIT_EXPECT_EQ(test, data_ptr[1], 6);
 
 	property_entries_free(copy);
 }
@@ -405,20 +405,18 @@ static void pe_test_move_inline_str(struct kunit *test)
 /* Handling of reference properties */
 static void pe_test_reference(struct kunit *test)
 {
-	static const struct software_node nodes[] = {
-		{ .name = "1", },
-		{ .name = "2", },
-		{ }
-	};
+	static const struct software_node node1 = { .name = "1" };
+	static const struct software_node node2 = { .name = "2" };
+	static const struct software_node *group[] = { &node1, &node2, NULL };
 
 	static const struct software_node_ref_args refs[] = {
-		SOFTWARE_NODE_REFERENCE(&nodes[0]),
-		SOFTWARE_NODE_REFERENCE(&nodes[1], 3, 4),
+		SOFTWARE_NODE_REFERENCE(&node1),
+		SOFTWARE_NODE_REFERENCE(&node2, 3, 4),
 	};
 
 	const struct property_entry entries[] = {
-		PROPERTY_ENTRY_REF("ref-1", &nodes[0]),
-		PROPERTY_ENTRY_REF("ref-2", &nodes[1], 1, 2),
+		PROPERTY_ENTRY_REF("ref-1", &node1),
+		PROPERTY_ENTRY_REF("ref-2", &node2, 1, 2),
 		PROPERTY_ENTRY_REF_ARRAY("ref-3", refs),
 		{ }
 	};
@@ -427,7 +425,7 @@ static void pe_test_reference(struct kunit *test)
 	struct fwnode_reference_args ref;
 	int error;
 
-	error = software_node_register_nodes(nodes);
+	error = software_node_register_node_group(group);
 	KUNIT_ASSERT_EQ(test, error, 0);
 
 	node = fwnode_create_software_node(entries, NULL);
@@ -436,7 +434,7 @@ static void pe_test_reference(struct kunit *test)
 	error = fwnode_property_get_reference_args(node, "ref-1", NULL,
 						   0, 0, &ref);
 	KUNIT_ASSERT_EQ(test, error, 0);
-	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &nodes[0]);
+	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &node1);
 	KUNIT_EXPECT_EQ(test, ref.nargs, 0U);
 
 	/* wrong index */
@@ -447,7 +445,7 @@ static void pe_test_reference(struct kunit *test)
 	error = fwnode_property_get_reference_args(node, "ref-2", NULL,
 						   1, 0, &ref);
 	KUNIT_ASSERT_EQ(test, error, 0);
-	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &nodes[1]);
+	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &node2);
 	KUNIT_EXPECT_EQ(test, ref.nargs, 1U);
 	KUNIT_EXPECT_EQ(test, ref.args[0], 1LLU);
 
@@ -455,7 +453,7 @@ static void pe_test_reference(struct kunit *test)
 	error = fwnode_property_get_reference_args(node, "ref-2", NULL,
 						   3, 0, &ref);
 	KUNIT_ASSERT_EQ(test, error, 0);
-	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &nodes[1]);
+	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &node2);
 	KUNIT_EXPECT_EQ(test, ref.nargs, 3U);
 	KUNIT_EXPECT_EQ(test, ref.args[0], 1LLU);
 	KUNIT_EXPECT_EQ(test, ref.args[1], 2LLU);
@@ -470,14 +468,14 @@ static void pe_test_reference(struct kunit *test)
 	error = fwnode_property_get_reference_args(node, "ref-3", NULL,
 						   0, 0, &ref);
 	KUNIT_ASSERT_EQ(test, error, 0);
-	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &nodes[0]);
+	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &node1);
 	KUNIT_EXPECT_EQ(test, ref.nargs, 0U);
 
 	/* second reference in the array */
 	error = fwnode_property_get_reference_args(node, "ref-3", NULL,
 						   2, 1, &ref);
 	KUNIT_ASSERT_EQ(test, error, 0);
-	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &nodes[1]);
+	KUNIT_EXPECT_PTR_EQ(test, to_software_node(ref.fwnode), &node2);
 	KUNIT_EXPECT_EQ(test, ref.nargs, 2U);
 	KUNIT_EXPECT_EQ(test, ref.args[0], 3LLU);
 	KUNIT_EXPECT_EQ(test, ref.args[1], 4LLU);
@@ -488,7 +486,7 @@ static void pe_test_reference(struct kunit *test)
 	KUNIT_EXPECT_NE(test, error, 0);
 
 	fwnode_remove_software_node(node);
-	software_node_unregister_nodes(nodes);
+	software_node_unregister_node_group(group);
 }
 
 static struct kunit_case property_entry_test_cases[] = {

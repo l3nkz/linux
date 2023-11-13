@@ -57,7 +57,7 @@ static int qcom_apcs_sdx55_clk_probe(struct platform_device *pdev)
 
 	regmap = dev_get_regmap(parent, NULL);
 	if (!regmap) {
-		dev_err_probe(dev, -ENODEV, "Failed to get parent regmap\n");
+		dev_err(dev, "Failed to get parent regmap\n");
 		return -ENODEV;
 	}
 
@@ -80,19 +80,15 @@ static int qcom_apcs_sdx55_clk_probe(struct platform_device *pdev)
 	a7cc->parent_map = apcs_mux_clk_parent_map;
 
 	a7cc->pclk = devm_clk_get(parent, "pll");
-	if (IS_ERR(a7cc->pclk)) {
-		ret = PTR_ERR(a7cc->pclk);
-		if (ret != -EPROBE_DEFER)
-			dev_err_probe(dev, ret, "Failed to get PLL clk\n");
-		return ret;
-	}
+	if (IS_ERR(a7cc->pclk))
+		return dev_err_probe(dev, PTR_ERR(a7cc->pclk),
+				     "Failed to get PLL clk\n");
 
 	a7cc->clk_nb.notifier_call = a7cc_notifier_cb;
 	ret = clk_notifier_register(a7cc->pclk, &a7cc->clk_nb);
-	if (ret) {
-		dev_err_probe(dev, ret, "Failed to register clock notifier\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "Failed to register clock notifier\n");
 
 	ret = devm_clk_register_regmap(dev, &a7cc->clkr);
 	if (ret) {
@@ -124,20 +120,18 @@ err:
 	return ret;
 }
 
-static int qcom_apcs_sdx55_clk_remove(struct platform_device *pdev)
+static void qcom_apcs_sdx55_clk_remove(struct platform_device *pdev)
 {
 	struct device *cpu_dev = get_cpu_device(0);
 	struct clk_regmap_mux_div *a7cc = platform_get_drvdata(pdev);
 
 	clk_notifier_unregister(a7cc->pclk, &a7cc->clk_nb);
 	dev_pm_domain_detach(cpu_dev, true);
-
-	return 0;
 }
 
 static struct platform_driver qcom_apcs_sdx55_clk_driver = {
 	.probe = qcom_apcs_sdx55_clk_probe,
-	.remove = qcom_apcs_sdx55_clk_remove,
+	.remove_new = qcom_apcs_sdx55_clk_remove,
 	.driver = {
 		.name = "qcom-sdx55-acps-clk",
 	},

@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
-/* vim: set ts=8 sw=8 noet tw=80 nowrap: */
 /*
  *  comedi/drivers/ni_routing/ni_route_values.h
  *  Route information for NI boards.
@@ -21,7 +20,7 @@
 #ifndef _COMEDI_DRIVERS_NI_ROUTINT_NI_ROUTE_VALUES_H
 #define _COMEDI_DRIVERS_NI_ROUTINT_NI_ROUTE_VALUES_H
 
-#include "../../comedi.h"
+#include <linux/comedi.h>
 #include <linux/types.h>
 
 /*

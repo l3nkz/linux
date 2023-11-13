@@ -2,8 +2,8 @@
 # Copyright 2020 Antmicro <www.antmicro.com>
 %YAML 1.2
 ---
-$id: "http://devicetree.org/schemas/soc/litex/litex,soc-controller.yaml#"
-$schema: "http://devicetree.org/meta-schemas/core.yaml#"
+$id: http://devicetree.org/schemas/soc/litex/litex,soc-controller.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: LiteX SoC Controller driver
 
@@ -35,7 +35,6 @@ examples:
     soc_ctrl0: soc-controller@f0000000 {
         compatible = "litex,soc-controller";
         reg = <0xf0000000 0xc>;
-        status = "okay";
     };
 
 ...

@@ -108,7 +108,7 @@ static void acpi_als_notify(struct acpi_device *device, u32 event)
 	if (iio_buffer_enabled(indio_dev) && iio_trigger_using_own(indio_dev)) {
 		switch (event) {
 		case ACPI_ALS_NOTIFY_ILLUMINANCE:
-			iio_trigger_poll_chained(als->trig);
+			iio_trigger_poll_nested(als->trig);
 			break;
 		default:
 			/* Unhandled event */
@@ -204,7 +204,8 @@ static int acpi_als_add(struct acpi_device *device)
 	indio_dev->channels = acpi_als_channels;
 	indio_dev->num_channels = ARRAY_SIZE(acpi_als_channels);
 
-	als->trig = devm_iio_trigger_alloc(dev, "%s-dev%d", indio_dev->name, indio_dev->id);
+	als->trig = devm_iio_trigger_alloc(dev, "%s-dev%d", indio_dev->name,
+					   iio_device_id(indio_dev));
 	if (!als->trig)
 		return -ENOMEM;
 

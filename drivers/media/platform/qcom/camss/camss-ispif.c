@@ -372,11 +372,9 @@ static int ispif_set_power(struct v4l2_subdev *sd, int on)
 			goto exit;
 		}
 
-		ret = pm_runtime_get_sync(dev);
-		if (ret < 0) {
-			pm_runtime_put_sync(dev);
+		ret = pm_runtime_resume_and_get(dev);
+		if (ret < 0)
 			goto exit;
-		}
 
 		ret = camss_enable_clocks(ispif->nclocks, ispif->clock, dev);
 		if (ret < 0) {
@@ -814,7 +812,7 @@ static int ispif_set_stream(struct v4l2_subdev *sd, int enable)
 	int ret;
 
 	if (enable) {
-		if (!media_entity_remote_pad(&line->pads[MSM_ISPIF_PAD_SINK]))
+		if (!media_pad_remote_pad_first(&line->pads[MSM_ISPIF_PAD_SINK]))
 			return -ENOLINK;
 
 		/* Config */
@@ -876,12 +874,13 @@ static int ispif_set_stream(struct v4l2_subdev *sd, int enable)
  */
 static struct v4l2_mbus_framefmt *
 __ispif_get_format(struct ispif_line *line,
-		   struct v4l2_subdev_pad_config *cfg,
+		   struct v4l2_subdev_state *sd_state,
 		   unsigned int pad,
 		   enum v4l2_subdev_format_whence which)
 {
 	if (which == V4L2_SUBDEV_FORMAT_TRY)
-		return v4l2_subdev_get_try_format(&line->subdev, cfg, pad);
+		return v4l2_subdev_get_try_format(&line->subdev, sd_state,
+						  pad);
 
 	return &line->fmt[pad];
 }
@@ -895,7 +894,7 @@ __ispif_get_format(struct ispif_line *line,
  * @which: wanted subdev format
  */
 static void ispif_try_format(struct ispif_line *line,
-			     struct v4l2_subdev_pad_config *cfg,
+			     struct v4l2_subdev_state *sd_state,
 			     unsigned int pad,
 			     struct v4l2_mbus_framefmt *fmt,
 			     enum v4l2_subdev_format_whence which)
@@ -925,7 +924,7 @@ static void ispif_try_format(struct ispif_line *line,
 	case MSM_ISPIF_PAD_SRC:
 		/* Set and return a format same as sink pad */
 
-		*fmt = *__ispif_get_format(line, cfg, MSM_ISPIF_PAD_SINK,
+		*fmt = *__ispif_get_format(line, sd_state, MSM_ISPIF_PAD_SINK,
 					   which);
 
 		break;
@@ -942,7 +941,7 @@ static void ispif_try_format(struct ispif_line *line,
  * return -EINVAL or zero on success
  */
 static int ispif_enum_mbus_code(struct v4l2_subdev *sd,
-				struct v4l2_subdev_pad_config *cfg,
+				struct v4l2_subdev_state *sd_state,
 				struct v4l2_subdev_mbus_code_enum *code)
 {
 	struct ispif_line *line = v4l2_get_subdevdata(sd);
@@ -957,7 +956,8 @@ static int ispif_enum_mbus_code(struct v4l2_subdev *sd,
 		if (code->index > 0)
 			return -EINVAL;
 
-		format = __ispif_get_format(line, cfg, MSM_ISPIF_PAD_SINK,
+		format = __ispif_get_format(line, sd_state,
+					    MSM_ISPIF_PAD_SINK,
 					    code->which);
 
 		code->code = format->code;
@@ -974,7 +974,7 @@ static int ispif_enum_mbus_code(struct v4l2_subdev *sd,
  * return -EINVAL or zero on success
  */
 static int ispif_enum_frame_size(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_pad_config *cfg,
+				 struct v4l2_subdev_state *sd_state,
 				 struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct ispif_line *line = v4l2_get_subdevdata(sd);
@@ -986,7 +986,7 @@ static int ispif_enum_frame_size(struct v4l2_subdev *sd,
 	format.code = fse->code;
 	format.width = 1;
 	format.height = 1;
-	ispif_try_format(line, cfg, fse->pad, &format, fse->which);
+	ispif_try_format(line, sd_state, fse->pad, &format, fse->which);
 	fse->min_width = format.width;
 	fse->min_height = format.height;
 
@@ -996,7 +996,7 @@ static int ispif_enum_frame_size(struct v4l2_subdev *sd,
 	format.code = fse->code;
 	format.width = -1;
 	format.height = -1;
-	ispif_try_format(line, cfg, fse->pad, &format, fse->which);
+	ispif_try_format(line, sd_state, fse->pad, &format, fse->which);
 	fse->max_width = format.width;
 	fse->max_height = format.height;
 
@@ -1012,13 +1012,13 @@ static int ispif_enum_frame_size(struct v4l2_subdev *sd,
  * Return -EINVAL or zero on success
  */
 static int ispif_get_format(struct v4l2_subdev *sd,
-			    struct v4l2_subdev_pad_config *cfg,
+			    struct v4l2_subdev_state *sd_state,
 			    struct v4l2_subdev_format *fmt)
 {
 	struct ispif_line *line = v4l2_get_subdevdata(sd);
 	struct v4l2_mbus_framefmt *format;
 
-	format = __ispif_get_format(line, cfg, fmt->pad, fmt->which);
+	format = __ispif_get_format(line, sd_state, fmt->pad, fmt->which);
 	if (format == NULL)
 		return -EINVAL;
 
@@ -1036,26 +1036,26 @@ static int ispif_get_format(struct v4l2_subdev *sd,
  * Return -EINVAL or zero on success
  */
 static int ispif_set_format(struct v4l2_subdev *sd,
-			    struct v4l2_subdev_pad_config *cfg,
+			    struct v4l2_subdev_state *sd_state,
 			    struct v4l2_subdev_format *fmt)
 {
 	struct ispif_line *line = v4l2_get_subdevdata(sd);
 	struct v4l2_mbus_framefmt *format;
 
-	format = __ispif_get_format(line, cfg, fmt->pad, fmt->which);
+	format = __ispif_get_format(line, sd_state, fmt->pad, fmt->which);
 	if (format == NULL)
 		return -EINVAL;
 
-	ispif_try_format(line, cfg, fmt->pad, &fmt->format, fmt->which);
+	ispif_try_format(line, sd_state, fmt->pad, &fmt->format, fmt->which);
 	*format = fmt->format;
 
 	/* Propagate the format from sink to source */
 	if (fmt->pad == MSM_ISPIF_PAD_SINK) {
-		format = __ispif_get_format(line, cfg, MSM_ISPIF_PAD_SRC,
+		format = __ispif_get_format(line, sd_state, MSM_ISPIF_PAD_SRC,
 					    fmt->which);
 
 		*format = fmt->format;
-		ispif_try_format(line, cfg, MSM_ISPIF_PAD_SRC, format,
+		ispif_try_format(line, sd_state, MSM_ISPIF_PAD_SRC, format,
 				 fmt->which);
 	}
 
@@ -1084,7 +1084,7 @@ static int ispif_init_formats(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 		}
 	};
 
-	return ispif_set_format(sd, fh ? fh->pad : NULL, &format);
+	return ispif_set_format(sd, fh ? fh->state : NULL, &format);
 }
 
 /*
@@ -1100,7 +1100,6 @@ int msm_ispif_subdev_init(struct camss *camss,
 	struct device *dev = camss->dev;
 	struct ispif_device *ispif = camss->ispif;
 	struct platform_device *pdev = to_platform_device(dev);
-	struct resource *r;
 	int i;
 	int ret;
 
@@ -1143,26 +1142,21 @@ int msm_ispif_subdev_init(struct camss *camss,
 
 	/* Memory */
 
-	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, res->reg[0]);
-	ispif->base = devm_ioremap_resource(dev, r);
+	ispif->base = devm_platform_ioremap_resource_byname(pdev, res->reg[0]);
 	if (IS_ERR(ispif->base))
 		return PTR_ERR(ispif->base);
 
-	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, res->reg[1]);
-	ispif->base_clk_mux = devm_ioremap_resource(dev, r);
+	ispif->base_clk_mux = devm_platform_ioremap_resource_byname(pdev, res->reg[1]);
 	if (IS_ERR(ispif->base_clk_mux))
 		return PTR_ERR(ispif->base_clk_mux);
 
 	/* Interrupt */
 
-	r = platform_get_resource_byname(pdev, IORESOURCE_IRQ, res->interrupt);
+	ret = platform_get_irq_byname(pdev, res->interrupt);
+	if (ret < 0)
+		return ret;
 
-	if (!r) {
-		dev_err(dev, "missing IRQ\n");
-		return -EINVAL;
-	}
-
-	ispif->irq = r->start;
+	ispif->irq = ret;
 	snprintf(ispif->irq_name, sizeof(ispif->irq_name), "%s_%s",
 		 dev_name(dev), MSM_ISPIF_NAME);
 	if (camss->version == CAMSS_8x16)
@@ -1259,6 +1253,41 @@ static enum ispif_intf ispif_get_intf(enum vfe_line_id line_id)
 }
 
 /*
+ * ispif_get_vfe_id - Get VFE HW module id
+ * @entity: Pointer to VFE media entity structure
+ * @id: Return CSID HW module id here
+ */
+static void ispif_get_vfe_id(struct media_entity *entity, u8 *id)
+{
+	struct v4l2_subdev *sd;
+	struct vfe_line *line;
+	struct vfe_device *vfe;
+
+	sd = media_entity_to_v4l2_subdev(entity);
+	line = v4l2_get_subdevdata(sd);
+	vfe = to_vfe(line);
+
+	*id = vfe->id;
+}
+
+/*
+ * ispif_get_vfe_line_id - Get VFE line id by media entity
+ * @entity: Pointer to VFE media entity structure
+ * @id: Return VFE line id here
+ */
+static void ispif_get_vfe_line_id(struct media_entity *entity,
+				  enum vfe_line_id *id)
+{
+	struct v4l2_subdev *sd;
+	struct vfe_line *line;
+
+	sd = media_entity_to_v4l2_subdev(entity);
+	line = v4l2_get_subdevdata(sd);
+
+	*id = line->id;
+}
+
+/*
  * ispif_link_setup - Setup ISPIF connections
  * @entity: Pointer to media entity structure
  * @local: Pointer to local pad
@@ -1272,7 +1301,7 @@ static int ispif_link_setup(struct media_entity *entity,
 			    const struct media_pad *remote, u32 flags)
 {
 	if (flags & MEDIA_LNK_FL_ENABLED) {
-		if (media_entity_remote_pad(local))
+		if (media_pad_remote_pad_first(local))
 			return -EBUSY;
 
 		if (local->flags & MEDIA_PAD_FL_SINK) {
@@ -1291,8 +1320,8 @@ static int ispif_link_setup(struct media_entity *entity,
 			sd = media_entity_to_v4l2_subdev(entity);
 			line = v4l2_get_subdevdata(sd);
 
-			msm_vfe_get_vfe_id(remote->entity, &line->vfe_id);
-			msm_vfe_get_vfe_line_id(remote->entity, &id);
+			ispif_get_vfe_id(remote->entity, &line->vfe_id);
+			ispif_get_vfe_line_id(remote->entity, &id);
 			line->interface = ispif_get_intf(id);
 		}
 	}

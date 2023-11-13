@@ -116,10 +116,8 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/io.h>
-
-#include "../comedidev.h"
-
-#include "comedi_8254.h"
+#include <linux/comedi/comedidev.h>
+#include <linux/comedi/comedi_8254.h>
 
 static unsigned int __i8254_read(struct comedi_8254 *i8254, unsigned int reg)
 {
@@ -555,6 +553,7 @@ static int comedi_8254_insn_config(struct comedi_device *dev,
 /**
  * comedi_8254_subdevice_init - initialize a comedi_subdevice for the 8254 timer
  * @s:		comedi_subdevice struct
+ * @i8254:	comedi_8254 struct
  */
 void comedi_8254_subdevice_init(struct comedi_subdevice *s,
 				struct comedi_8254 *i8254)
@@ -607,7 +606,7 @@ static struct comedi_8254 *__i8254_init(unsigned long iobase,
 
 /**
  * comedi_8254_init - allocate and initialize the 8254 device for pio access
- * @mmio:	port I/O base address
+ * @iobase:	port I/O base address
  * @osc_base:	base time of the counter in ns
  *		OPTIONAL - only used by comedi_8254_cascade_ns_to_timer()
  * @iosize:	I/O register size

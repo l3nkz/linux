@@ -2,7 +2,7 @@
 /*
  * HiSilicon SoC HHA uncore Hardware event counters support
  *
- * Copyright (C) 2017 Hisilicon Limited
+ * Copyright (C) 2017 HiSilicon Limited
  * Author: Shaokun Zhang <zhangshaokun@hisilicon.com>
  *         Anurup M <anurup.m@huawei.com>
  *
@@ -90,7 +90,7 @@ static void hisi_hha_pmu_config_ds(struct perf_event *event)
 
 		val = readl(hha_pmu->base + HHA_DATSRC_CTRL);
 		val |= HHA_DATSRC_SKT_EN;
-		writel(ds_skt, hha_pmu->base + HHA_DATSRC_CTRL);
+		writel(val, hha_pmu->base + HHA_DATSRC_CTRL);
 	}
 }
 
@@ -104,7 +104,7 @@ static void hisi_hha_pmu_clear_ds(struct perf_event *event)
 
 		val = readl(hha_pmu->base + HHA_DATSRC_CTRL);
 		val &= ~HHA_DATSRC_SKT_EN;
-		writel(ds_skt, hha_pmu->base + HHA_DATSRC_CTRL);
+		writel(val, hha_pmu->base + HHA_DATSRC_CTRL);
 	}
 }
 
@@ -510,6 +510,11 @@ static int hisi_hha_pmu_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "hisi_sccl%u_hha%u",
+			      hha_pmu->sccl_id, hha_pmu->index_id);
+	if (!name)
+		return -ENOMEM;
+
 	ret = cpuhp_state_add_instance(CPUHP_AP_PERF_ARM_HISI_HHA_ONLINE,
 				       &hha_pmu->node);
 	if (ret) {
@@ -517,30 +522,13 @@ static int hisi_hha_pmu_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "hisi_sccl%u_hha%u",
-			      hha_pmu->sccl_id, hha_pmu->index_id);
-	hha_pmu->pmu = (struct pmu) {
-		.name		= name,
-		.module		= THIS_MODULE,
-		.task_ctx_nr	= perf_invalid_context,
-		.event_init	= hisi_uncore_pmu_event_init,
-		.pmu_enable	= hisi_uncore_pmu_enable,
-		.pmu_disable	= hisi_uncore_pmu_disable,
-		.add		= hisi_uncore_pmu_add,
-		.del		= hisi_uncore_pmu_del,
-		.start		= hisi_uncore_pmu_start,
-		.stop		= hisi_uncore_pmu_stop,
-		.read		= hisi_uncore_pmu_read,
-		.attr_groups	= hha_pmu->pmu_events.attr_groups,
-		.capabilities	= PERF_PMU_CAP_NO_EXCLUDE,
-	};
+	hisi_pmu_init(hha_pmu, THIS_MODULE);
 
 	ret = perf_pmu_register(&hha_pmu->pmu, name, -1);
 	if (ret) {
 		dev_err(hha_pmu->dev, "HHA PMU register failed!\n");
 		cpuhp_state_remove_instance_nocalls(
 			CPUHP_AP_PERF_ARM_HISI_HHA_ONLINE, &hha_pmu->node);
-		irq_set_affinity_hint(hha_pmu->irq, NULL);
 	}
 
 	return ret;
@@ -553,8 +541,6 @@ static int hisi_hha_pmu_remove(struct platform_device *pdev)
 	perf_pmu_unregister(&hha_pmu->pmu);
 	cpuhp_state_remove_instance_nocalls(CPUHP_AP_PERF_ARM_HISI_HHA_ONLINE,
 					    &hha_pmu->node);
-	irq_set_affinity_hint(hha_pmu->irq, NULL);
-
 	return 0;
 }
 

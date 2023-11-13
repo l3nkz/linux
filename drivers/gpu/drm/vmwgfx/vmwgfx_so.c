@@ -24,6 +24,7 @@
  *
  **************************************************************************/
 
+#include "vmwgfx_bo.h"
 #include "vmwgfx_drv.h"
 #include "vmwgfx_resource_priv.h"
 #include "vmwgfx_so.h"
@@ -33,7 +34,7 @@
  * The currently only reason we need to keep track of views is that if we
  * destroy a hardware surface, all views pointing to it must also be destroyed,
  * otherwise the device will error.
- * So in particuar if a surface is evicted, we must destroy all views pointing
+ * So in particular if a surface is evicted, we must destroy all views pointing
  * to it, and all context bindings of that view. Similarly we must restore
  * the view bindings, views and surfaces pointed to by the views when a
  * context is referenced in the command stream.
@@ -70,7 +71,7 @@ struct vmw_view {
 	unsigned view_id;              /* Immutable */
 	u32 cmd_size;                  /* Immutable */
 	bool committed;                /* Protected by binding_mutex */
-	u32 cmd[1];                    /* Immutable */
+	u32 cmd[];		       /* Immutable */
 };
 
 static int vmw_view_create(struct vmw_resource *res);
@@ -81,16 +82,17 @@ static void vmw_view_commit_notify(struct vmw_resource *res,
 
 static const struct vmw_res_func vmw_view_func = {
 	.res_type = vmw_res_view,
-	.needs_backup = false,
+	.needs_guest_memory = false,
 	.may_evict = false,
 	.type_name = "DX view",
-	.backup_placement = NULL,
+	.domain = VMW_BO_DOMAIN_SYS,
+	.busy_domain = VMW_BO_DOMAIN_SYS,
 	.create = vmw_view_create,
 	.commit_notify = vmw_view_commit_notify,
 };
 
 /**
- * struct vmw_view - view define command body stub
+ * struct vmw_view_define - view define command body stub
  *
  * @view_id: The device id of the view being defined
  * @sid: The surface id of the view being defined
@@ -279,18 +281,15 @@ static bool vmw_view_id_ok(u32 user_key, enum vmw_view_type view_type)
  *
  * @res: Pointer to a struct vmw_resource
  *
- * Frees memory and memory accounting held by a struct vmw_view.
+ * Frees memory held by the struct vmw_view.
  */
 static void vmw_view_res_free(struct vmw_resource *res)
 {
 	struct vmw_view *view = vmw_view(res);
-	size_t size = offsetof(struct vmw_view, cmd) + view->cmd_size;
-	struct vmw_private *dev_priv = res->dev_priv;
 
 	vmw_resource_unreference(&view->cotable);
 	vmw_resource_unreference(&view->srf);
 	kfree_rcu(view, rcu);
-	ttm_mem_global_free(vmw_mem_glob(dev_priv), size);
 }
 
 /**
@@ -327,10 +326,6 @@ int vmw_view_add(struct vmw_cmdbuf_res_manager *man,
 	struct vmw_private *dev_priv = ctx->dev_priv;
 	struct vmw_resource *res;
 	struct vmw_view *view;
-	struct ttm_operation_ctx ttm_opt_ctx = {
-		.interruptible = true,
-		.no_wait_gpu = false
-	};
 	size_t size;
 	int ret;
 
@@ -347,16 +342,8 @@ int vmw_view_add(struct vmw_cmdbuf_res_manager *man,
 
 	size = offsetof(struct vmw_view, cmd) + cmd_size;
 
-	ret = ttm_mem_global_alloc(vmw_mem_glob(dev_priv), size, &ttm_opt_ctx);
-	if (ret) {
-		if (ret != -ERESTARTSYS)
-			DRM_ERROR("Out of graphics memory for view creation\n");
-		return ret;
-	}
-
 	view = kmalloc(size, GFP_KERNEL);
 	if (!view) {
-		ttm_mem_global_free(vmw_mem_glob(dev_priv), size);
 		return -ENOMEM;
 	}
 
@@ -539,7 +526,8 @@ const SVGACOTableType vmw_so_cotables[] = {
 	[vmw_so_ds] = SVGA_COTABLE_DEPTHSTENCIL,
 	[vmw_so_rs] = SVGA_COTABLE_RASTERIZERSTATE,
 	[vmw_so_ss] = SVGA_COTABLE_SAMPLER,
-	[vmw_so_so] = SVGA_COTABLE_STREAMOUTPUT
+	[vmw_so_so] = SVGA_COTABLE_STREAMOUTPUT,
+	[vmw_so_max]= SVGA_COTABLE_MAX
 };
 
 
@@ -581,4 +569,8 @@ static void vmw_so_build_asserts(void)
 		     offsetof(SVGA3dCmdDXDefineRenderTargetView, sid));
 	BUILD_BUG_ON(offsetof(struct vmw_view_define, sid) !=
 		     offsetof(SVGA3dCmdDXDefineDepthStencilView, sid));
+	BUILD_BUG_ON(offsetof(struct vmw_view_define, sid) !=
+		     offsetof(SVGA3dCmdDXDefineUAView, sid));
+	BUILD_BUG_ON(offsetof(struct vmw_view_define, sid) !=
+		     offsetof(SVGA3dCmdDXDefineDepthStencilView_v2, sid));
 }

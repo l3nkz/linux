@@ -67,7 +67,7 @@ static int iio_dmaengine_buffer_submit_block(struct iio_dma_buffer_queue *queue,
 	dma_cookie_t cookie;
 
 	block->bytes_used = min(block->size, dmaengine_buffer->max_size);
-	block->bytes_used = rounddown(block->bytes_used,
+	block->bytes_used = round_down(block->bytes_used,
 			dmaengine_buffer->align);
 
 	desc = dmaengine_prep_slave_single(dmaengine_buffer->chan,
@@ -136,14 +136,14 @@ static ssize_t iio_dmaengine_buffer_get_length_align(struct device *dev,
 	struct dmaengine_buffer *dmaengine_buffer =
 		iio_buffer_to_dmaengine_buffer(buffer);
 
-	return sprintf(buf, "%zu\n", dmaengine_buffer->align);
+	return sysfs_emit(buf, "%zu\n", dmaengine_buffer->align);
 }
 
 static IIO_DEVICE_ATTR(length_align_bytes, 0444,
 		       iio_dmaengine_buffer_get_length_align, NULL, 0);
 
-static const struct attribute *iio_dmaengine_buffer_attrs[] = {
-	&iio_dev_attr_length_align_bytes.dev_attr.attr,
+static const struct iio_dev_attr *iio_dmaengine_buffer_attrs[] = {
+	&iio_dev_attr_length_align_bytes,
 	NULL,
 };
 
@@ -228,9 +228,9 @@ static void iio_dmaengine_buffer_free(struct iio_buffer *buffer)
 	iio_buffer_put(buffer);
 }
 
-static void __devm_iio_dmaengine_buffer_free(struct device *dev, void *res)
+static void __devm_iio_dmaengine_buffer_free(void *buffer)
 {
-	iio_dmaengine_buffer_free(*(struct iio_buffer **)res);
+	iio_dmaengine_buffer_free(buffer);
 }
 
 /**
@@ -247,21 +247,17 @@ static void __devm_iio_dmaengine_buffer_free(struct device *dev, void *res)
 static struct iio_buffer *devm_iio_dmaengine_buffer_alloc(struct device *dev,
 	const char *channel)
 {
-	struct iio_buffer **bufferp, *buffer;
-
-	bufferp = devres_alloc(__devm_iio_dmaengine_buffer_free,
-			       sizeof(*bufferp), GFP_KERNEL);
-	if (!bufferp)
-		return ERR_PTR(-ENOMEM);
+	struct iio_buffer *buffer;
+	int ret;
 
 	buffer = iio_dmaengine_buffer_alloc(dev, channel);
-	if (IS_ERR(buffer)) {
-		devres_free(bufferp);
+	if (IS_ERR(buffer))
 		return buffer;
-	}
 
-	*bufferp = buffer;
-	devres_add(dev, bufferp);
+	ret = devm_add_action_or_reset(dev, __devm_iio_dmaengine_buffer_free,
+				       buffer);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return buffer;
 }

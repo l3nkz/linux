@@ -86,7 +86,7 @@ static int bcm6345_reset_status(struct reset_controller_dev *rcdev,
 	return !(__raw_readl(bcm6345_reset->base) & BIT(id));
 }
 
-static struct reset_control_ops bcm6345_reset_ops = {
+static const struct reset_control_ops bcm6345_reset_ops = {
 	.assert = bcm6345_reset_assert,
 	.deassert = bcm6345_reset_deassert,
 	.reset = bcm6345_reset_reset,
@@ -101,8 +101,6 @@ static int bcm6345_reset_probe(struct platform_device *pdev)
 				     sizeof(*bcm6345_reset), GFP_KERNEL);
 	if (!bcm6345_reset)
 		return -ENOMEM;
-
-	platform_set_drvdata(pdev, bcm6345_reset);
 
 	bcm6345_reset->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(bcm6345_reset->base))

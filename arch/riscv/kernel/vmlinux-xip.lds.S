@@ -12,7 +12,6 @@
 
 #include <asm/vmlinux.lds.h>
 #include <asm/page.h>
-#include <asm/pgtable.h>
 #include <asm/cache.h>
 #include <asm/thread_info.h>
 
@@ -40,13 +39,11 @@ SECTIONS
 		_stext = .;
 		TEXT_TEXT
 		SCHED_TEXT
-		CPUIDLE_TEXT
 		LOCK_TEXT
 		KPROBES_TEXT
 		ENTRY_TEXT
 		IRQENTRY_TEXT
 		SOFTIRQENTRY_TEXT
-		*(.fixup)
 		_etext = .;
 	}
 	RO_DATA(L1_CACHE_BYTES)
@@ -65,8 +62,11 @@ SECTIONS
 /*
  * From this point, stuff is considered writable and will be copied to RAM
  */
-	__data_loc = ALIGN(16);		/* location in file */
-	. = LOAD_OFFSET + XIP_OFFSET;	/* location in memory */
+	__data_loc = ALIGN(PAGE_SIZE);		/* location in file */
+	. = KERNEL_LINK_ADDR + XIP_OFFSET;	/* location in memory */
+
+#undef LOAD_OFFSET
+#define LOAD_OFFSET (KERNEL_LINK_ADDR + XIP_OFFSET - (__data_loc & XIP_OFFSET_MASK))
 
 	_sdata = .;			/* Start of data section */
 	_data = .;
@@ -97,14 +97,7 @@ SECTIONS
 		KEEP(*(__soc_builtin_dtb_table))
 		__soc_builtin_dtb_table_end = .;
 	}
-	PERCPU_SECTION(L1_CACHE_BYTES)
 
-	. = ALIGN(8);
-	.alternative : {
-		__alt_start = .;
-		*(.alternative)
-		__alt_end = .;
-	}
 	__init_end = .;
 
 	. = ALIGN(16);
@@ -122,7 +115,8 @@ SECTIONS
 	}
 
 	BSS_SECTION(PAGE_SIZE, PAGE_SIZE, 0)
-	EXCEPTION_TABLE(0x10)
+
+	PERCPU_SECTION(L1_CACHE_BYTES)
 
 	.rel.dyn : AT(ADDR(.rel.dyn) - LOAD_OFFSET) {
 		*(.rel.dyn*)

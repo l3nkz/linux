@@ -26,12 +26,22 @@
  */
 #define OTX2_CPT_INST_QLEN_MSGS	((OTX2_CPT_SIZE_DIV40 - 1) * 40)
 
+/*
+ * LDWB is getting incorrectly used when IQB_LDWB = 1 and CPT instruction
+ * queue has less than 320 free entries. So, increase HW instruction queue
+ * size by 320 and give 320 entries less for SW/NIX RX as a workaround.
+ */
+#define OTX2_CPT_INST_QLEN_EXTRA_BYTES  (320 * OTX2_CPT_INST_SIZE)
+#define OTX2_CPT_EXTRA_SIZE_DIV40       (320/40)
+
 /* CPT instruction queue length in bytes */
-#define OTX2_CPT_INST_QLEN_BYTES (OTX2_CPT_SIZE_DIV40 * 40 * \
-				  OTX2_CPT_INST_SIZE)
+#define OTX2_CPT_INST_QLEN_BYTES                                               \
+		((OTX2_CPT_SIZE_DIV40 * 40 * OTX2_CPT_INST_SIZE) +             \
+		OTX2_CPT_INST_QLEN_EXTRA_BYTES)
 
 /* CPT instruction group queue length in bytes */
-#define OTX2_CPT_INST_GRP_QLEN_BYTES (OTX2_CPT_SIZE_DIV40 * 16)
+#define OTX2_CPT_INST_GRP_QLEN_BYTES                                           \
+		((OTX2_CPT_SIZE_DIV40 + OTX2_CPT_EXTRA_SIZE_DIV40) * 16)
 
 /* CPT FC length in bytes */
 #define OTX2_CPT_Q_FC_LEN 128
@@ -84,12 +94,22 @@ struct otx2_cptlf_info {
 	struct otx2_cptlf_wqe *wqe;       /* Tasklet work info */
 };
 
+struct cpt_hw_ops {
+	void (*send_cmd)(union otx2_cpt_inst_s *cptinst, u32 insts_num,
+			 struct otx2_cptlf_info *lf);
+	u8 (*cpt_get_compcode)(union otx2_cpt_res_s *result);
+	u8 (*cpt_get_uc_compcode)(union otx2_cpt_res_s *result);
+};
+
 struct otx2_cptlfs_info {
 	/* Registers start address of VF/PF LFs are attached to */
 	void __iomem *reg_base;
+#define LMTLINE_SIZE  128
+	void __iomem *lmt_base;
 	struct pci_dev *pdev;   /* Device LFs are attached to */
 	struct otx2_cptlf_info lf[OTX2_CPT_MAX_LFS_NUM];
 	struct otx2_mbox *mbox;
+	struct cpt_hw_ops *ops;
 	u8 are_lfs_attached;	/* Whether CPT LFs are attached */
 	u8 lfs_num;		/* Number of CPT LFs */
 	u8 kcrypto_eng_grp_num;	/* Kernel crypto engine group number */
@@ -160,7 +180,7 @@ static inline void otx2_cptlf_set_iqueues_base_addr(
 
 	for (slot = 0; slot < lfs->lfs_num; slot++) {
 		lf_q_base.u = lfs->lf[slot].iqueue.dma_addr;
-		otx2_cpt_write64(lfs->reg_base, BLKADDR_CPT0, slot,
+		otx2_cpt_write64(lfs->reg_base, lfs->blkaddr, slot,
 				 OTX2_CPT_LF_Q_BASE, lf_q_base.u);
 	}
 }
@@ -169,8 +189,9 @@ static inline void otx2_cptlf_do_set_iqueue_size(struct otx2_cptlf_info *lf)
 {
 	union otx2_cptx_lf_q_size lf_q_size = { .u = 0x0 };
 
-	lf_q_size.s.size_div40 = OTX2_CPT_SIZE_DIV40;
-	otx2_cpt_write64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	lf_q_size.s.size_div40 = OTX2_CPT_SIZE_DIV40 +
+				 OTX2_CPT_EXTRA_SIZE_DIV40;
+	otx2_cpt_write64(lf->lfs->reg_base, lf->lfs->blkaddr, lf->slot,
 			 OTX2_CPT_LF_Q_SIZE, lf_q_size.u);
 }
 
@@ -186,15 +207,16 @@ static inline void otx2_cptlf_do_disable_iqueue(struct otx2_cptlf_info *lf)
 {
 	union otx2_cptx_lf_ctl lf_ctl = { .u = 0x0 };
 	union otx2_cptx_lf_inprog lf_inprog;
+	u8 blkaddr = lf->lfs->blkaddr;
 	int timeout = 20;
 
 	/* Disable instructions enqueuing */
-	otx2_cpt_write64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	otx2_cpt_write64(lf->lfs->reg_base, blkaddr, lf->slot,
 			 OTX2_CPT_LF_CTL, lf_ctl.u);
 
 	/* Wait for instruction queue to become empty */
 	do {
-		lf_inprog.u = otx2_cpt_read64(lf->lfs->reg_base, BLKADDR_CPT0,
+		lf_inprog.u = otx2_cpt_read64(lf->lfs->reg_base, blkaddr,
 					      lf->slot, OTX2_CPT_LF_INPROG);
 		if (!lf_inprog.s.inflight)
 			break;
@@ -213,7 +235,7 @@ static inline void otx2_cptlf_do_disable_iqueue(struct otx2_cptlf_info *lf)
 	 * the queue should be empty at this point
 	 */
 	lf_inprog.s.eena = 0x0;
-	otx2_cpt_write64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	otx2_cpt_write64(lf->lfs->reg_base, blkaddr, lf->slot,
 			 OTX2_CPT_LF_INPROG, lf_inprog.u);
 }
 
@@ -228,14 +250,15 @@ static inline void otx2_cptlf_disable_iqueues(struct otx2_cptlfs_info *lfs)
 static inline void otx2_cptlf_set_iqueue_enq(struct otx2_cptlf_info *lf,
 					     bool enable)
 {
+	u8 blkaddr = lf->lfs->blkaddr;
 	union otx2_cptx_lf_ctl lf_ctl;
 
-	lf_ctl.u = otx2_cpt_read64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	lf_ctl.u = otx2_cpt_read64(lf->lfs->reg_base, blkaddr, lf->slot,
 				   OTX2_CPT_LF_CTL);
 
 	/* Set iqueue's enqueuing */
 	lf_ctl.s.ena = enable ? 0x1 : 0x0;
-	otx2_cpt_write64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	otx2_cpt_write64(lf->lfs->reg_base, blkaddr, lf->slot,
 			 OTX2_CPT_LF_CTL, lf_ctl.u);
 }
 
@@ -248,13 +271,14 @@ static inline void otx2_cptlf_set_iqueue_exec(struct otx2_cptlf_info *lf,
 					      bool enable)
 {
 	union otx2_cptx_lf_inprog lf_inprog;
+	u8 blkaddr = lf->lfs->blkaddr;
 
-	lf_inprog.u = otx2_cpt_read64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	lf_inprog.u = otx2_cpt_read64(lf->lfs->reg_base, blkaddr, lf->slot,
 				      OTX2_CPT_LF_INPROG);
 
 	/* Set iqueue's execution */
 	lf_inprog.s.eena = enable ? 0x1 : 0x0;
-	otx2_cpt_write64(lf->lfs->reg_base, BLKADDR_CPT0, lf->slot,
+	otx2_cpt_write64(lf->lfs->reg_base, blkaddr, lf->slot,
 			 OTX2_CPT_LF_INPROG, lf_inprog.u);
 }
 
@@ -341,6 +365,18 @@ static inline void otx2_cpt_send_cmd(union otx2_cpt_inst_s *cptinst,
 static inline bool otx2_cptlf_started(struct otx2_cptlfs_info *lfs)
 {
 	return atomic_read(&lfs->state) == OTX2_CPTLF_STARTED;
+}
+
+static inline void otx2_cptlf_set_dev_info(struct otx2_cptlfs_info *lfs,
+					   struct pci_dev *pdev,
+					   void __iomem *reg_base,
+					   struct otx2_mbox *mbox,
+					   int blkaddr)
+{
+	lfs->pdev = pdev;
+	lfs->reg_base = reg_base;
+	lfs->mbox = mbox;
+	lfs->blkaddr = blkaddr;
 }
 
 int otx2_cptlf_init(struct otx2_cptlfs_info *lfs, u8 eng_grp_msk, int pri,

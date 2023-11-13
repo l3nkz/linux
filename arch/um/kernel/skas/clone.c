@@ -24,12 +24,12 @@
 void __attribute__ ((__section__ (".__syscall_stub")))
 stub_clone_handler(void)
 {
-	int stack;
-	struct stub_data *data = (void *) ((unsigned long)&stack & ~(UM_KERN_PAGE_SIZE - 1));
+	struct stub_data *data = get_stub_data();
 	long err;
 
 	err = stub_syscall2(__NR_clone, CLONE_PARENT | CLONE_FILES | SIGCHLD,
-			    (unsigned long)data + UM_KERN_PAGE_SIZE / 2 - sizeof(void *));
+			    (unsigned long)data +
+				STUB_DATA_PAGES * UM_KERN_PAGE_SIZE / 2);
 	if (err) {
 		data->parent_err = err;
 		goto done;

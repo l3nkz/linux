@@ -29292,6 +29292,7 @@
 #define DIG0_DIG_FIFO_STATUS__DIG_FIFO_OVERWRITE_LEVEL_MASK                                                   0x000000FCL
 #define DIG0_DIG_FIFO_STATUS__DIG_FIFO_ERROR_ACK_MASK                                                         0x00000100L
 #define DIG0_DIG_FIFO_STATUS__DIG_FIFO_CAL_AVERAGE_LEVEL_MASK                                                 0x0000FC00L
+#define DIG0_DIG_FIFO_STATUS__DIG_FIFO_MAXIMUM_LEVEL_MASK                                                     0x001F0000L
 #define DIG0_DIG_FIFO_STATUS__DIG_FIFO_MINIMUM_LEVEL_MASK                                                     0x03C00000L
 #define DIG0_DIG_FIFO_STATUS__DIG_FIFO_READ_CLOCK_SRC_MASK                                                    0x04000000L
 #define DIG0_DIG_FIFO_STATUS__DIG_FIFO_CALIBRATED_MASK                                                        0x20000000L
@@ -29360,12 +29361,14 @@
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_GC_CONT__SHIFT                                                     0x5
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ISRC_SEND__SHIFT                                                   0x8
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ISRC_CONT__SHIFT                                                   0x9
+#define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ACP_SEND__SHIFT                                                    0xc
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ISRC_LINE__SHIFT                                                   0x10
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_NULL_SEND_MASK                                                     0x00000001L
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_GC_SEND_MASK                                                       0x00000010L
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_GC_CONT_MASK                                                       0x00000020L
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ISRC_SEND_MASK                                                     0x00000100L
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ISRC_CONT_MASK                                                     0x00000200L
+#define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ACP_SEND_MASK                                                      0x00001000L
 #define DIG0_HDMI_VBI_PACKET_CONTROL__HDMI_ISRC_LINE_MASK                                                     0x003F0000L
 //DIG0_HDMI_INFOFRAME_CONTROL0
 #define DIG0_HDMI_INFOFRAME_CONTROL0__HDMI_AUDIO_INFO_SEND__SHIFT                                             0x4
@@ -34431,6 +34434,7 @@
 #define DIG3_DIG_FIFO_STATUS__DIG_FIFO_OVERWRITE_LEVEL__SHIFT                                                 0x2
 #define DIG3_DIG_FIFO_STATUS__DIG_FIFO_ERROR_ACK__SHIFT                                                       0x8
 #define DIG3_DIG_FIFO_STATUS__DIG_FIFO_CAL_AVERAGE_LEVEL__SHIFT                                               0xa
+#define DIG0_DIG_FIFO_STATUS__DIG_FIFO_MAXIMUM_LEVEL__SHIFT                                                   0x10
 #define DIG3_DIG_FIFO_STATUS__DIG_FIFO_MINIMUM_LEVEL__SHIFT                                                   0x16
 #define DIG3_DIG_FIFO_STATUS__DIG_FIFO_READ_CLOCK_SRC__SHIFT                                                  0x1a
 #define DIG3_DIG_FIFO_STATUS__DIG_FIFO_CALIBRATED__SHIFT                                                      0x1d

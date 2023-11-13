@@ -11,6 +11,7 @@
 
 #include <linux/types.h>
 #include <linux/list.h>
+#include <asm/asm-extable.h>
 #include <asm/sclp.h>
 #include <asm/ebcdic.h>
 
@@ -80,15 +81,6 @@ typedef unsigned int sclp_cmdw_t;
 #define GDS_ID_TEXTCMD		0x1320
 
 #define GDS_KEY_SELFDEFTEXTMSG	0x31
-
-enum sclp_pm_event {
-	SCLP_PM_EVENT_FREEZE,
-	SCLP_PM_EVENT_THAW,
-	SCLP_PM_EVENT_RESTORE,
-};
-
-#define SCLP_PANIC_PRIO		1
-#define SCLP_PANIC_PRIO_CLIENT	0
 
 typedef u64 sccb_mask_t;
 
@@ -212,7 +204,7 @@ struct read_storage_sccb {
 	u16 assigned;
 	u16 standby;
 	u16 :16;
-	u32 entries[0];
+	u32 entries[];
 } __packed;
 
 static inline void sclp_fill_core_info(struct sclp_core_info *info,
@@ -293,10 +285,6 @@ struct sclp_register {
 	void (*state_change_fn)(struct sclp_register *);
 	/* called for events in cp_receive_mask/sclp_receive_mask */
 	void (*receiver_fn)(struct evbuf_header *);
-	/* called for power management events */
-	void (*pm_event_fn)(struct sclp_register *, enum sclp_pm_event);
-	/* pm event posted flag */
-	int pm_event_posted;
 };
 
 /* externals from sclp.c */
@@ -319,11 +307,9 @@ enum {
 
 extern int sclp_init_state;
 extern int sclp_console_pages;
-extern int sclp_console_drop;
+extern bool sclp_console_drop;
 extern unsigned long sclp_console_full;
 extern bool sclp_mask_compat_mode;
-
-extern char *sclp_early_sccb;
 
 void sclp_early_wait_irq(void);
 int sclp_early_cmd(sclp_cmdw_t cmd, void *sccb);
@@ -348,7 +334,7 @@ static inline int sclp_service_call(sclp_cmdw_t command, void *sccb)
 		"2:\n"
 		EX_TABLE(0b, 2b)
 		EX_TABLE(1b, 2b)
-		: "+&d" (cc) : "d" (command), "a" ((unsigned long)sccb)
+		: "+&d" (cc) : "d" (command), "a" (__pa(sccb))
 		: "cc", "memory");
 	if (cc == 4)
 		return -EINVAL;

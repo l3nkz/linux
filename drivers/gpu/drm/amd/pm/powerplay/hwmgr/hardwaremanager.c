@@ -82,7 +82,8 @@ int phm_enable_dynamic_state_management(struct pp_hwmgr *hwmgr)
 
 	/* Skip for suspend/resume case */
 	if (!hwmgr->pp_one_vf && smum_is_dpm_running(hwmgr)
-	    && !amdgpu_passthrough(adev) && adev->in_suspend) {
+	    && !amdgpu_passthrough(adev) && adev->in_suspend
+		&& adev->asic_type != CHIP_RAVEN) {
 		pr_info("dpm has been enabled\n");
 		return 0;
 	}
@@ -240,7 +241,8 @@ int phm_start_thermal_controller(struct pp_hwmgr *hwmgr)
 		TEMP_RANGE_MAX,
 		TEMP_RANGE_MIN,
 		TEMP_RANGE_MAX,
-		TEMP_RANGE_MAX};
+		TEMP_RANGE_MAX,
+		0};
 	struct amdgpu_device *adev = hwmgr->adev;
 
 	if (!hwmgr->not_vf)
@@ -264,6 +266,7 @@ int phm_start_thermal_controller(struct pp_hwmgr *hwmgr)
 	adev->pm.dpm.thermal.min_mem_temp = range.mem_min;
 	adev->pm.dpm.thermal.max_mem_crit_temp = range.mem_crit_max;
 	adev->pm.dpm.thermal.max_mem_emergency_temp = range.mem_emergency_max;
+	adev->pm.dpm.thermal.sw_ctf_threshold = range.sw_ctf_threshold;
 
 	return ret;
 }

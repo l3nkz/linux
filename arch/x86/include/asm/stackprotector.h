@@ -11,7 +11,7 @@
  * The same segment is shared by percpu area and stack canary.  On
  * x86_64, percpu symbols are zero based and %gs (64-bit) points to the
  * base of percpu area.  The first occupant of the percpu area is always
- * fixed_percpu_data which contains stack_canary at the approproate
+ * fixed_percpu_data which contains stack_canary at the appropriate
  * offset.  On x86_32, the stack canary is just a regular percpu
  * variable.
  *
@@ -34,7 +34,6 @@
 #include <asm/percpu.h>
 #include <asm/desc.h>
 
-#include <linux/random.h>
 #include <linux/sched.h>
 
 /*
@@ -50,22 +49,11 @@
  */
 static __always_inline void boot_init_stack_canary(void)
 {
-	u64 canary;
-	u64 tsc;
+	unsigned long canary = get_random_canary();
 
 #ifdef CONFIG_X86_64
 	BUILD_BUG_ON(offsetof(struct fixed_percpu_data, stack_canary) != 40);
 #endif
-	/*
-	 * We both use the random pool and the current TSC as a source
-	 * of randomness. The TSC only matters for very early init,
-	 * there it already has some randomness on most systems. Later
-	 * on during the bootup the random pool has true entropy too.
-	 */
-	get_random_bytes(&canary, sizeof(canary));
-	tsc = rdtsc();
-	canary += tsc + (tsc << 32UL);
-	canary &= CANARY_MASK;
 
 	current->stack_canary = canary;
 #ifdef CONFIG_X86_64

@@ -53,6 +53,7 @@ static struct attribute *acpi_data_node_default_attrs[] = {
 	&data_node_path.attr,
 	NULL
 };
+ATTRIBUTE_GROUPS(acpi_data_node_default);
 
 #define to_data_node(k) container_of(k, struct acpi_data_node, kobj)
 #define to_attr(a) container_of(a, struct acpi_data_node_attr, attr)
@@ -77,9 +78,9 @@ static void acpi_data_node_release(struct kobject *kobj)
 	complete(&dn->kobj_done);
 }
 
-static struct kobj_type acpi_data_node_ktype = {
+static const struct kobj_type acpi_data_node_ktype = {
 	.sysfs_ops = &acpi_data_node_sysfs_ops,
-	.default_attrs = acpi_data_node_default_attrs,
+	.default_groups = acpi_data_node_default_groups,
 	.release = acpi_data_node_release,
 };
 
@@ -132,7 +133,7 @@ static void acpi_hide_nondev_subnodes(struct acpi_device_data *data)
  *         -EINVAL: output error
  *         -ENOMEM: output is truncated
  */
-static int create_pnp_modalias(struct acpi_device *acpi_dev, char *modalias,
+static int create_pnp_modalias(const struct acpi_device *acpi_dev, char *modalias,
 			       int size)
 {
 	int len;
@@ -190,7 +191,7 @@ static int create_pnp_modalias(struct acpi_device *acpi_dev, char *modalias,
  * only be called for devices having ACPI_DT_NAMESPACE_HID in their list of
  * ACPI/PNP IDs.
  */
-static int create_of_modalias(struct acpi_device *acpi_dev, char *modalias,
+static int create_of_modalias(const struct acpi_device *acpi_dev, char *modalias,
 			      int size)
 {
 	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER };
@@ -238,7 +239,7 @@ static int create_of_modalias(struct acpi_device *acpi_dev, char *modalias,
 	return len;
 }
 
-int __acpi_device_uevent_modalias(struct acpi_device *adev,
+int __acpi_device_uevent_modalias(const struct acpi_device *adev,
 				  struct kobj_uevent_env *env)
 {
 	int len;
@@ -268,19 +269,21 @@ int __acpi_device_uevent_modalias(struct acpi_device *adev,
 
 /**
  * acpi_device_uevent_modalias - uevent modalias for ACPI-enumerated devices.
+ * @dev: Struct device to get ACPI device node.
+ * @env: Environment variables of the kobject uevent.
  *
  * Create the uevent modalias field for ACPI-enumerated devices.
  *
  * Because other buses do not support ACPI HIDs & CIDs, e.g. for a device with
  * hid:IBM0001 and cid:ACPI0001 you get: "acpi:IBM0001:ACPI0001".
  */
-int acpi_device_uevent_modalias(struct device *dev, struct kobj_uevent_env *env)
+int acpi_device_uevent_modalias(const struct device *dev, struct kobj_uevent_env *env)
 {
 	return __acpi_device_uevent_modalias(acpi_companion_match(dev), env);
 }
 EXPORT_SYMBOL_GPL(acpi_device_uevent_modalias);
 
-static int __acpi_device_modalias(struct acpi_device *adev, char *buf, int size)
+static int __acpi_device_modalias(const struct acpi_device *adev, char *buf, int size)
 {
 	int len, count;
 
@@ -313,6 +316,9 @@ static int __acpi_device_modalias(struct acpi_device *adev, char *buf, int size)
 
 /**
  * acpi_device_modalias - modalias sysfs attribute for ACPI-enumerated devices.
+ * @dev: Struct device to get ACPI device node.
+ * @buf: The buffer to save pnp_modalias and of_modalias.
+ * @size: Size of buffer.
  *
  * Create the modalias sysfs attribute for ACPI-enumerated devices.
  *
@@ -370,7 +376,7 @@ eject_store(struct device *d, struct device_attribute *attr,
 		return -EINVAL;
 
 	if ((!acpi_device->handler || !acpi_device->handler->hotplug.enabled)
-	    && !acpi_device->driver)
+	    && !d->driver)
 		return -ENODEV;
 
 	status = acpi_get_type(acpi_device->handle, &not_used);
@@ -448,7 +454,7 @@ static ssize_t description_show(struct device *dev,
 		(wchar_t *)acpi_dev->pnp.str_obj->buffer.pointer,
 		acpi_dev->pnp.str_obj->buffer.length,
 		UTF16_LITTLE_ENDIAN, buf,
-		PAGE_SIZE);
+		PAGE_SIZE - 1);
 
 	buf[result++] = '\n';
 

@@ -8,11 +8,9 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
-#include <asm/dma.h>
-
-#include "../comedidev.h"
-
-#include "comedi_isadma.h"
+#include <linux/isa-dma.h>
+#include <linux/comedi/comedidev.h>
+#include <linux/comedi/comedi_isadma.h>
 
 /**
  * comedi_isadma_program - program and enable an ISA DMA transfer
@@ -143,7 +141,7 @@ EXPORT_SYMBOL_GPL(comedi_isadma_set_mode);
  * comedi_isadma_alloc - allocate and initialize the ISA DMA
  * @dev:	comedi_device struct
  * @n_desc:	the number of cookies to allocate
- * @dma_chan:	DMA channel for the first cookie
+ * @dma_chan1:	DMA channel for the first cookie
  * @dma_chan2:	DMA channel for the second cookie
  * @maxsize:	the size of the buffer to allocate for each cookie
  * @dma_dir:	the DMA direction

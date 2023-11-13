@@ -58,8 +58,7 @@ static int _kvm_mips_host_tlb_inv(unsigned long entryhi)
 	tlb_probe_hazard();
 	idx = read_c0_index();
 
-	if (idx >= current_cpu_data.tlbsize)
-		BUG();
+	BUG_ON(idx >= current_cpu_data.tlbsize);
 
 	if (idx >= 0) {
 		write_c0_entryhi(UNIQUE_ENTRYHI(idx));
@@ -154,7 +153,7 @@ EXPORT_SYMBOL_GPL(kvm_vz_host_tlb_inv);
  * kvm_vz_guest_tlb_lookup() - Lookup a guest VZ TLB mapping.
  * @vcpu:	KVM VCPU pointer.
  * @gpa:	Guest virtual address in a TLB mapped guest segment.
- * @gpa:	Ponter to output guest physical address it maps to.
+ * @gpa:	Pointer to output guest physical address it maps to.
  *
  * Converts a guest virtual address in a guest TLB mapped segment to a guest
  * physical address, by probing the guest TLB.

@@ -29,6 +29,7 @@
 #include "dc_types.h"
 #include "dccg.h"
 #include "clk_mgr_internal.h"
+#include "link.h"
 
 #include "dce100/dce_clk_mgr.h"
 #include "dce110/dce110_clk_mgr.h"
@@ -39,9 +40,14 @@
 #include "dcn10/rv2_clk_mgr.h"
 #include "dcn20/dcn20_clk_mgr.h"
 #include "dcn21/rn_clk_mgr.h"
+#include "dcn201/dcn201_clk_mgr.h"
 #include "dcn30/dcn30_clk_mgr.h"
 #include "dcn301/vg_clk_mgr.h"
-
+#include "dcn31/dcn31_clk_mgr.h"
+#include "dcn314/dcn314_clk_mgr.h"
+#include "dcn315/dcn315_clk_mgr.h"
+#include "dcn316/dcn316_clk_mgr.h"
+#include "dcn32/dcn32_clk_mgr.h"
 
 int clk_mgr_helper_get_active_display_cnt(
 		struct dc *dc,
@@ -52,6 +58,12 @@ int clk_mgr_helper_get_active_display_cnt(
 	display_count = 0;
 	for (i = 0; i < context->stream_count; i++) {
 		const struct dc_stream_state *stream = context->streams[i];
+
+		/* Don't count SubVP phantom pipes as part of active
+		 * display count
+		 */
+		if (stream->mall_stream_config.type == SUBVP_PHANTOM)
+			continue;
 
 		/*
 		 * Only notify active stream or virtual stream.
@@ -90,15 +102,23 @@ void clk_mgr_exit_optimized_pwr_state(const struct dc *dc, struct clk_mgr *clk_m
 	struct dc_link *edp_links[MAX_NUM_EDP];
 	struct dc_link *edp_link = NULL;
 	int edp_num;
+	unsigned int panel_inst;
 
-	get_edp_links(dc, edp_links, &edp_num);
+	dc_get_edp_links(dc, edp_links, &edp_num);
 	if (dc->hwss.exit_optimized_pwr_state)
 		dc->hwss.exit_optimized_pwr_state(dc, dc->current_state);
 
 	if (edp_num) {
-		edp_link = edp_links[0];
-		clk_mgr->psr_allow_active_cache = edp_link->psr_settings.psr_allow_active;
-		dc_link_set_psr_allow_active(edp_link, false, false, false);
+		for (panel_inst = 0; panel_inst < edp_num; panel_inst++) {
+			bool allow_active = false;
+
+			edp_link = edp_links[panel_inst];
+			if (!edp_link->psr_settings.psr_feature_enabled)
+				continue;
+			clk_mgr->psr_allow_active_cache = edp_link->psr_settings.psr_allow_active;
+			dc->link_srv->edp_set_psr_allow_active(edp_link, &allow_active, false, false, NULL);
+			dc->link_srv->edp_set_replay_allow_active(edp_link, &allow_active, false, false, NULL);
+		}
 	}
 
 }
@@ -108,12 +128,19 @@ void clk_mgr_optimize_pwr_state(const struct dc *dc, struct clk_mgr *clk_mgr)
 	struct dc_link *edp_links[MAX_NUM_EDP];
 	struct dc_link *edp_link = NULL;
 	int edp_num;
+	unsigned int panel_inst;
 
-	get_edp_links(dc, edp_links, &edp_num);
+	dc_get_edp_links(dc, edp_links, &edp_num);
 	if (edp_num) {
-		edp_link = edp_links[0];
-		dc_link_set_psr_allow_active(edp_link,
-				clk_mgr->psr_allow_active_cache, false, false);
+		for (panel_inst = 0; panel_inst < edp_num; panel_inst++) {
+			edp_link = edp_links[panel_inst];
+			if (!edp_link->psr_settings.psr_feature_enabled)
+				continue;
+			dc->link_srv->edp_set_psr_allow_active(edp_link,
+					&clk_mgr->psr_allow_active_cache, false, false, NULL);
+			dc->link_srv->edp_set_replay_allow_active(edp_link,
+					&clk_mgr->psr_allow_active_cache, false, false, NULL);
+		}
 	}
 
 	if (dc->hwss.optimize_pwr_state)
@@ -197,7 +224,7 @@ struct clk_mgr *dc_clk_mgr_create(struct dc_context *ctx, struct pp_smu_funcs *p
 			dce120_clk_mgr_construct(ctx, clk_mgr);
 		return &clk_mgr->base;
 	}
-#if defined(CONFIG_DRM_AMD_DC_DCN)
+#if defined(CONFIG_DRM_AMD_DC_FP)
 	case FAMILY_RV: {
 		struct clk_mgr_internal *clk_mgr = kzalloc(sizeof(*clk_mgr), GFP_KERNEL);
 
@@ -241,6 +268,14 @@ struct clk_mgr *dc_clk_mgr_create(struct dc_context *ctx, struct pp_smu_funcs *p
 			dcn3_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
 			return &clk_mgr->base;
 		}
+		if (ASICREV_IS_BEIGE_GOBY_P(asic_id.hw_internal_rev)) {
+			dcn3_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+			return &clk_mgr->base;
+		}
+		if (asic_id.chip_id == DEVICE_ID_NV_13FE) {
+			dcn201_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+			return &clk_mgr->base;
+		}
 		dcn20_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
 		return &clk_mgr->base;
 	}
@@ -256,7 +291,70 @@ struct clk_mgr *dc_clk_mgr_create(struct dc_context *ctx, struct pp_smu_funcs *p
 			return &clk_mgr->base.base;
 		}
 		break;
-#endif
+
+	case FAMILY_YELLOW_CARP: {
+		struct clk_mgr_dcn31 *clk_mgr = kzalloc(sizeof(*clk_mgr), GFP_KERNEL);
+
+		if (clk_mgr == NULL) {
+			BREAK_TO_DEBUGGER();
+			return NULL;
+		}
+
+		dcn31_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+		return &clk_mgr->base.base;
+	}
+		break;
+	case AMDGPU_FAMILY_GC_10_3_6: {
+		struct clk_mgr_dcn315 *clk_mgr = kzalloc(sizeof(*clk_mgr), GFP_KERNEL);
+
+		if (clk_mgr == NULL) {
+			BREAK_TO_DEBUGGER();
+			return NULL;
+		}
+
+		dcn315_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+		return &clk_mgr->base.base;
+	}
+		break;
+	case AMDGPU_FAMILY_GC_10_3_7: {
+		struct clk_mgr_dcn316 *clk_mgr = kzalloc(sizeof(*clk_mgr), GFP_KERNEL);
+
+		if (clk_mgr == NULL) {
+			BREAK_TO_DEBUGGER();
+			return NULL;
+		}
+
+		dcn316_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+		return &clk_mgr->base.base;
+	}
+		break;
+	case AMDGPU_FAMILY_GC_11_0_0: {
+	    struct clk_mgr_internal *clk_mgr = kzalloc(sizeof(*clk_mgr), GFP_KERNEL);
+
+	    if (clk_mgr == NULL) {
+		BREAK_TO_DEBUGGER();
+		return NULL;
+	    }
+
+	    dcn32_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+	    return &clk_mgr->base;
+	    break;
+	}
+
+	case AMDGPU_FAMILY_GC_11_0_1: {
+		struct clk_mgr_dcn314 *clk_mgr = kzalloc(sizeof(*clk_mgr), GFP_KERNEL);
+
+		if (clk_mgr == NULL) {
+			BREAK_TO_DEBUGGER();
+			return NULL;
+		}
+
+		dcn314_clk_mgr_construct(ctx, clk_mgr, pp_smu, dccg);
+		return &clk_mgr->base.base;
+	}
+	break;
+
+#endif /* CONFIG_DRM_AMD_DC_FP - Family RV */
 	default:
 		ASSERT(0); /* Unknown Asic */
 		break;
@@ -269,13 +367,15 @@ void dc_destroy_clk_mgr(struct clk_mgr *clk_mgr_base)
 {
 	struct clk_mgr_internal *clk_mgr = TO_CLK_MGR_INTERNAL(clk_mgr_base);
 
-#ifdef CONFIG_DRM_AMD_DC_DCN
+#ifdef CONFIG_DRM_AMD_DC_FP
 	switch (clk_mgr_base->ctx->asic_id.chip_family) {
 	case FAMILY_NV:
 		if (ASICREV_IS_SIENNA_CICHLID_P(clk_mgr_base->ctx->asic_id.hw_internal_rev)) {
 			dcn3_clk_mgr_destroy(clk_mgr);
+		} else if (ASICREV_IS_DIMGREY_CAVEFISH_P(clk_mgr_base->ctx->asic_id.hw_internal_rev)) {
+			dcn3_clk_mgr_destroy(clk_mgr);
 		}
-		if (ASICREV_IS_DIMGREY_CAVEFISH_P(clk_mgr_base->ctx->asic_id.hw_internal_rev)) {
+		if (ASICREV_IS_BEIGE_GOBY_P(clk_mgr_base->ctx->asic_id.hw_internal_rev)) {
 			dcn3_clk_mgr_destroy(clk_mgr);
 		}
 		break;
@@ -285,10 +385,30 @@ void dc_destroy_clk_mgr(struct clk_mgr *clk_mgr_base)
 			vg_clk_mgr_destroy(clk_mgr);
 		break;
 
+	case FAMILY_YELLOW_CARP:
+		dcn31_clk_mgr_destroy(clk_mgr);
+		break;
+
+	case AMDGPU_FAMILY_GC_10_3_6:
+		dcn315_clk_mgr_destroy(clk_mgr);
+		break;
+
+	case AMDGPU_FAMILY_GC_10_3_7:
+		dcn316_clk_mgr_destroy(clk_mgr);
+		break;
+
+	case AMDGPU_FAMILY_GC_11_0_0:
+		dcn32_clk_mgr_destroy(clk_mgr);
+		break;
+
+	case AMDGPU_FAMILY_GC_11_0_1:
+		dcn314_clk_mgr_destroy(clk_mgr);
+		break;
+
 	default:
 		break;
 	}
-#endif
+#endif /* CONFIG_DRM_AMD_DC_FP */
 
 	kfree(clk_mgr);
 }

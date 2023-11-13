@@ -19,11 +19,12 @@ SYSCALL_DEFINE5(pciconfig_read, unsigned long, bus, unsigned long, dfn,
 	u8 byte;
 	u16 word;
 	u32 dword;
-	long err;
-	int cfg_ret;
+	int err, cfg_ret;
 
+	err = -EPERM;
+	dev = NULL;
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		goto error;
 
 	err = -ENODEV;
 	dev = pci_get_domain_bus_and_slot(0, bus, dfn);
@@ -51,13 +52,13 @@ SYSCALL_DEFINE5(pciconfig_read, unsigned long, bus, unsigned long, dfn,
 
 	switch (len) {
 	case 1:
-		err = put_user(byte, (unsigned char __user *)buf);
+		err = put_user(byte, (u8 __user *)buf);
 		break;
 	case 2:
-		err = put_user(word, (unsigned short __user *)buf);
+		err = put_user(word, (u16 __user *)buf);
 		break;
 	case 4:
-		err = put_user(dword, (unsigned int __user *)buf);
+		err = put_user(dword, (u32 __user *)buf);
 		break;
 	}
 	pci_dev_put(dev);
@@ -69,13 +70,13 @@ error:
 	   they get instead of a machine check on x86.  */
 	switch (len) {
 	case 1:
-		put_user(-1, (unsigned char __user *)buf);
+		put_user(-1, (u8 __user *)buf);
 		break;
 	case 2:
-		put_user(-1, (unsigned short __user *)buf);
+		put_user(-1, (u16 __user *)buf);
 		break;
 	case 4:
-		put_user(-1, (unsigned int __user *)buf);
+		put_user(-1, (u32 __user *)buf);
 		break;
 	}
 	pci_dev_put(dev);

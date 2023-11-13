@@ -5,6 +5,8 @@
 //
 // Copyright (C) 2018-19 Texas Instruments Incorporated - http://www.ti.com/
 
+#include <linux/hrtimer.h>
+#include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 
 #include "m_can.h"
@@ -28,11 +30,18 @@ static u32 iomap_read_reg(struct m_can_classdev *cdev, int reg)
 	return readl(priv->base + reg);
 }
 
-static u32 iomap_read_fifo(struct m_can_classdev *cdev, int offset)
+static int iomap_read_fifo(struct m_can_classdev *cdev, int offset, void *val, size_t val_count)
 {
 	struct m_can_plat_priv *priv = cdev_to_priv(cdev);
+	void __iomem *src = priv->mram_base + offset;
 
-	return readl(priv->mram_base + offset);
+	while (val_count--) {
+		*(unsigned int *)val = ioread32(src);
+		val += 4;
+		src += 4;
+	}
+
+	return 0;
 }
 
 static int iomap_write_reg(struct m_can_classdev *cdev, int reg, int val)
@@ -44,11 +53,17 @@ static int iomap_write_reg(struct m_can_classdev *cdev, int reg, int val)
 	return 0;
 }
 
-static int iomap_write_fifo(struct m_can_classdev *cdev, int offset, int val)
+static int iomap_write_fifo(struct m_can_classdev *cdev, int offset,
+			    const void *val, size_t val_count)
 {
 	struct m_can_plat_priv *priv = cdev_to_priv(cdev);
+	void __iomem *dst = priv->mram_base + offset;
 
-	writel(val, priv->mram_base + offset);
+	while (val_count--) {
+		iowrite32(*(unsigned int *)val, dst);
+		val += 4;
+		dst += 4;
+	}
 
 	return 0;
 }
@@ -67,7 +82,8 @@ static int m_can_plat_probe(struct platform_device *pdev)
 	struct resource *res;
 	void __iomem *addr;
 	void __iomem *mram_addr;
-	int irq, ret = 0;
+	struct phy *transceiver;
+	int irq = 0, ret = 0;
 
 	mcan_class = m_can_class_allocate_dev(&pdev->dev,
 					      sizeof(struct m_can_plat_priv));
@@ -80,12 +96,23 @@ static int m_can_plat_probe(struct platform_device *pdev)
 	if (ret)
 		goto probe_fail;
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "m_can");
-	addr = devm_ioremap_resource(&pdev->dev, res);
-	irq = platform_get_irq_byname(pdev, "int0");
-	if (IS_ERR(addr) || irq < 0) {
-		ret = -EINVAL;
+	addr = devm_platform_ioremap_resource_byname(pdev, "m_can");
+	if (IS_ERR(addr)) {
+		ret = PTR_ERR(addr);
 		goto probe_fail;
+	}
+
+	if (device_property_present(mcan_class->dev, "interrupts") ||
+	    device_property_present(mcan_class->dev, "interrupt-names")) {
+		irq = platform_get_irq_byname(pdev, "int0");
+		if (irq < 0) {
+			ret = irq;
+			goto probe_fail;
+		}
+	} else {
+		dev_dbg(mcan_class->dev, "Polling enabled, initialize hrtimer");
+		hrtimer_init(&mcan_class->hrtimer, CLOCK_MONOTONIC,
+			     HRTIMER_MODE_REL_PINNED);
 	}
 
 	/* message ram could be shared */
@@ -101,6 +128,16 @@ static int m_can_plat_probe(struct platform_device *pdev)
 		goto probe_fail;
 	}
 
+	transceiver = devm_phy_optional_get(&pdev->dev, NULL);
+	if (IS_ERR(transceiver)) {
+		ret = PTR_ERR(transceiver);
+		dev_err_probe(&pdev->dev, ret, "failed to get phy\n");
+		goto probe_fail;
+	}
+
+	if (transceiver)
+		mcan_class->can.bitrate_max = transceiver->attrs.max_link_rate;
+
 	priv->base = addr;
 	priv->mram_base = mram_addr;
 
@@ -108,14 +145,13 @@ static int m_can_plat_probe(struct platform_device *pdev)
 	mcan_class->pm_clock_support = 1;
 	mcan_class->can.clock.freq = clk_get_rate(mcan_class->cclk);
 	mcan_class->dev = &pdev->dev;
+	mcan_class->transceiver = transceiver;
 
 	mcan_class->ops = &m_can_plat_ops;
 
 	mcan_class->is_peripheral = false;
 
 	platform_set_drvdata(pdev, mcan_class);
-
-	m_can_init_ram(mcan_class);
 
 	pm_runtime_enable(mcan_class->dev);
 	ret = m_can_class_register(mcan_class);
@@ -141,7 +177,7 @@ static __maybe_unused int m_can_resume(struct device *dev)
 	return m_can_class_resume(dev);
 }
 
-static int m_can_plat_remove(struct platform_device *pdev)
+static void m_can_plat_remove(struct platform_device *pdev)
 {
 	struct m_can_plat_priv *priv = platform_get_drvdata(pdev);
 	struct m_can_classdev *mcan_class = &priv->cdev;
@@ -149,8 +185,6 @@ static int m_can_plat_remove(struct platform_device *pdev)
 	m_can_class_unregister(mcan_class);
 
 	m_can_class_free_dev(mcan_class->net);
-
-	return 0;
 }
 
 static int __maybe_unused m_can_runtime_suspend(struct device *dev)
@@ -200,7 +234,7 @@ static struct platform_driver m_can_plat_driver = {
 		.pm     = &m_can_pmops,
 	},
 	.probe = m_can_plat_probe,
-	.remove = m_can_plat_remove,
+	.remove_new = m_can_plat_remove,
 };
 
 module_platform_driver(m_can_plat_driver);

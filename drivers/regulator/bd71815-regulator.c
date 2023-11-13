@@ -13,10 +13,11 @@
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
+#include <linux/of.h>
+#include <linux/gpio/consumer.h>
 #include <linux/regulator/driver.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/gpio.h>
 #include <linux/mfd/rohm-generic.h>
 #include <linux/mfd/rohm-bd71815.h>
 #include <linux/regulator/of_regulator.h>
@@ -24,14 +25,6 @@
 struct bd71815_regulator {
 	struct regulator_desc desc;
 	const struct rohm_dvs_config *dvs;
-};
-
-struct bd71815_pmic {
-	struct bd71815_regulator descs[BD71815_REGULATOR_CNT];
-	struct regmap *regmap;
-	struct device *dev;
-	struct gpio_descs *gps;
-	struct regulator_dev *rdev[BD71815_REGULATOR_CNT];
 };
 
 static const int bd7181x_wled_currents[] = {
@@ -207,10 +200,10 @@ static int buck12_set_hw_dvs_levels(struct device_node *np,
 
 	data = container_of(desc, struct bd71815_regulator, desc);
 
-	if (of_find_property(np, "rohm,dvs-run-voltage", NULL) ||
-	    of_find_property(np, "rohm,dvs-suspend-voltage", NULL) ||
-	    of_find_property(np, "rohm,dvs-lpsr-voltage", NULL) ||
-	    of_find_property(np, "rohm,dvs-snvs-voltage", NULL)) {
+	if (of_property_present(np, "rohm,dvs-run-voltage") ||
+	    of_property_present(np, "rohm,dvs-suspend-voltage") ||
+	    of_property_present(np, "rohm,dvs-lpsr-voltage") ||
+	    of_property_present(np, "rohm,dvs-snvs-voltage")) {
 		ret = regmap_read(cfg->regmap, desc->vsel_reg, &val);
 		if (ret)
 			return ret;
@@ -300,14 +293,13 @@ static int bd7181x_led_set_current_limit(struct regulator_dev *rdev,
 
 static int bd7181x_buck12_get_voltage_sel(struct regulator_dev *rdev)
 {
-	struct bd71815_pmic *pmic = rdev_get_drvdata(rdev);
 	int rid = rdev_get_id(rdev);
 	int ret, regh, regl, val;
 
 	regh = BD71815_REG_BUCK1_VOLT_H + rid * 0x2;
 	regl = BD71815_REG_BUCK1_VOLT_L + rid * 0x2;
 
-	ret = regmap_read(pmic->regmap, regh, &val);
+	ret = regmap_read(rdev->regmap, regh, &val);
 	if (ret)
 		return ret;
 
@@ -319,7 +311,7 @@ static int bd7181x_buck12_get_voltage_sel(struct regulator_dev *rdev)
 	 * by BD71815_BUCK_DVSSEL bit
 	 */
 	if ((!(val & BD71815_BUCK_STBY_DVS)) && (!(val & BD71815_BUCK_DVSSEL)))
-		ret = regmap_read(pmic->regmap, regl, &val);
+		ret = regmap_read(rdev->regmap, regl, &val);
 
 	if (ret)
 		return ret;
@@ -333,14 +325,13 @@ static int bd7181x_buck12_get_voltage_sel(struct regulator_dev *rdev)
 static int bd7181x_buck12_set_voltage_sel(struct regulator_dev *rdev,
 					  unsigned int sel)
 {
-	struct bd71815_pmic *pmic = rdev_get_drvdata(rdev);
 	int rid = rdev_get_id(rdev);
 	int ret, val, reg, regh, regl;
 
 	regh = BD71815_REG_BUCK1_VOLT_H + rid*0x2;
 	regl = BD71815_REG_BUCK1_VOLT_L + rid*0x2;
 
-	ret = regmap_read(pmic->regmap, regh, &val);
+	ret = regmap_read(rdev->regmap, regh, &val);
 	if (ret)
 		return ret;
 
@@ -350,7 +341,7 @@ static int bd7181x_buck12_set_voltage_sel(struct regulator_dev *rdev,
 	 * voltages at runtime is not supported by this driver.
 	 */
 	if (((val & BD71815_BUCK_STBY_DVS))) {
-		return regmap_update_bits(pmic->regmap, regh, BD71815_VOLT_MASK,
+		return regmap_update_bits(rdev->regmap, regh, BD71815_VOLT_MASK,
 					  sel);
 	}
 	/* Update new voltage to the register which is not selected now */
@@ -359,12 +350,13 @@ static int bd7181x_buck12_set_voltage_sel(struct regulator_dev *rdev,
 	else
 		reg = regh;
 
-	ret = regmap_update_bits(pmic->regmap, reg, BD71815_VOLT_MASK, sel);
+	ret = regmap_update_bits(rdev->regmap, reg, BD71815_VOLT_MASK, sel);
 	if (ret)
 		return ret;
 
 	/* Select the other DVS register to be used */
-	return regmap_update_bits(pmic->regmap, regh, BD71815_BUCK_DVSSEL, ~val);
+	return regmap_update_bits(rdev->regmap, regh, BD71815_BUCK_DVSSEL,
+				  ~val);
 }
 
 static const struct regulator_ops bd7181x_ldo_regulator_ops = {
@@ -468,9 +460,9 @@ static const struct regulator_ops bd7181x_led_regulator_ops = {
 			.min_uV = (min),				\
 			.uV_step = (step),				\
 			.vsel_reg = (vsel),				\
-			.vsel_mask = 0x3f,				\
+			.vsel_mask = BD71815_VOLT_MASK,			\
 			.enable_reg = (ereg),				\
-			.enable_mask = 0x04,				\
+			.enable_mask = BD71815_BUCK_RUN_ON,		\
 			.ramp_reg = (ereg),				\
 			.ramp_mask = BD71815_BUCK_RAMPRATE_MASK,	\
 			.ramp_delay_table = bd7181x_ramp_table,		\
@@ -522,7 +514,7 @@ static const struct regulator_ops bd7181x_led_regulator_ops = {
 		.dvs = (_dvs),						\
 	}
 
-static struct bd71815_regulator bd71815_regulators[] = {
+static const struct bd71815_regulator bd71815_regulators[] = {
 	BD71815_BUCK12_REG(buck1, BD71815_BUCK1, BD71815_REG_BUCK1_VOLT_H,
 			   BD71815_REG_BUCK1_MODE, 800000, 2000000, 25000,
 			   &buck1_dvs),
@@ -568,29 +560,20 @@ static struct bd71815_regulator bd71815_regulators[] = {
 
 static int bd7181x_probe(struct platform_device *pdev)
 {
-	struct bd71815_pmic *pmic;
 	struct regulator_config config = {};
 	int i, ret;
 	struct gpio_desc *ldo4_en;
+	struct regmap *regmap;
 
-	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
-	if (!pmic)
-		return -ENOMEM;
-
-	memcpy(pmic->descs, bd71815_regulators,	sizeof(pmic->descs));
-
-	pmic->dev = &pdev->dev;
-	pmic->regmap = dev_get_regmap(pdev->dev.parent, NULL);
-	if (!pmic->regmap) {
-		dev_err(pmic->dev, "No parent regmap\n");
+	regmap = dev_get_regmap(pdev->dev.parent, NULL);
+	if (!regmap) {
+		dev_err(&pdev->dev, "No parent regmap\n");
 		return -ENODEV;
 	}
-	platform_set_drvdata(pdev, pmic);
-	ldo4_en = devm_gpiod_get_from_of_node(&pdev->dev,
-					      pdev->dev.parent->of_node,
-						 "rohm,vsel-gpios", 0,
-						 GPIOD_ASIS, "ldo4-en");
 
+	ldo4_en = devm_fwnode_gpiod_get(&pdev->dev,
+					dev_fwnode(pdev->dev.parent),
+					"rohm,vsel", GPIOD_ASIS, "ldo4-en");
 	if (IS_ERR(ldo4_en)) {
 		ret = PTR_ERR(ldo4_en);
 		if (ret != -ENOENT)
@@ -599,33 +582,29 @@ static int bd7181x_probe(struct platform_device *pdev)
 	}
 
 	/* Disable to go to ship-mode */
-	ret = regmap_update_bits(pmic->regmap, BD71815_REG_PWRCTRL,
-				 RESTARTEN, 0);
+	ret = regmap_update_bits(regmap, BD71815_REG_PWRCTRL, RESTARTEN, 0);
 	if (ret)
 		return ret;
 
 	config.dev = pdev->dev.parent;
-	config.regmap = pmic->regmap;
+	config.regmap = regmap;
 
 	for (i = 0; i < BD71815_REGULATOR_CNT; i++) {
-		struct regulator_desc *desc;
+		const struct regulator_desc *desc;
 		struct regulator_dev *rdev;
 
-		desc = &pmic->descs[i].desc;
+		desc = &bd71815_regulators[i].desc;
+
 		if (i == BD71815_LDO4)
 			config.ena_gpiod = ldo4_en;
-
-		config.driver_data = pmic;
+		else
+			config.ena_gpiod = NULL;
 
 		rdev = devm_regulator_register(&pdev->dev, desc, &config);
-		if (IS_ERR(rdev)) {
-			dev_err(&pdev->dev,
-				"failed to register %s regulator\n",
-				desc->name);
-			return PTR_ERR(rdev);
-		}
-		config.ena_gpiod = NULL;
-		pmic->rdev[i] = rdev;
+		if (IS_ERR(rdev))
+			return dev_err_probe(&pdev->dev, PTR_ERR(rdev),
+					     "failed to register %s regulator\n",
+					     desc->name);
 	}
 	return 0;
 }
@@ -639,7 +618,7 @@ MODULE_DEVICE_TABLE(platform, bd7181x_pmic_id);
 static struct platform_driver bd7181x_regulator = {
 	.driver = {
 		.name = "bd7181x-pmic",
-		.owner = THIS_MODULE,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe = bd7181x_probe,
 	.id_table = bd7181x_pmic_id,

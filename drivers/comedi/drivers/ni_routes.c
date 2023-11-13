@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0+
-/* vim: set ts=8 sw=8 noet tw=80 nowrap: */
 /*
  *  comedi/drivers/ni_routes.c
  *  Route information for NI boards.
@@ -22,8 +21,7 @@
 #include <linux/slab.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
-
-#include "../comedi.h"
+#include <linux/comedi.h>
 
 #include "ni_routes.h"
 #include "ni_routing/ni_route_values.h"
@@ -58,8 +56,7 @@ static const u8 *ni_find_route_values(const char *device_family)
 	int i;
 
 	for (i = 0; ni_all_route_values[i]; ++i) {
-		if (memcmp(ni_all_route_values[i]->family, device_family,
-			   strnlen(device_family, 30)) == 0) {
+		if (!strcmp(ni_all_route_values[i]->family, device_family)) {
 			rv = &ni_all_route_values[i]->register_values[0][0];
 			break;
 		}
@@ -77,8 +74,7 @@ ni_find_valid_routes(const char *board_name)
 	int i;
 
 	for (i = 0; ni_device_routes_list[i]; ++i) {
-		if (memcmp(ni_device_routes_list[i]->device, board_name,
-			   strnlen(board_name, 30)) == 0) {
+		if (!strcmp(ni_device_routes_list[i]->device, board_name)) {
 			dr = ni_device_routes_list[i];
 			break;
 		}
@@ -246,7 +242,7 @@ unsigned int ni_get_valid_routes(const struct ni_route_tables *tables,
 }
 EXPORT_SYMBOL_GPL(ni_get_valid_routes);
 
-/**
+/*
  * List of NI global signal names that, as destinations, are only routeable
  * indirectly through the *_arg elements of the comedi_cmd structure.
  */
@@ -388,7 +384,7 @@ ni_find_route_set(const int destination,
 }
 EXPORT_SYMBOL_GPL(ni_find_route_set);
 
-/**
+/*
  * ni_route_set_has_source() - Determines whether the given source is in
  *			       included given route_set.
  *
@@ -507,7 +503,7 @@ s8 ni_route_to_register(const int src, const int dest,
 }
 EXPORT_SYMBOL_GPL(ni_route_to_register);
 
-/**
+/*
  * ni_find_route_source() - Finds the signal source corresponding to a signal
  *			    route (src-->dest) of the specified routing register
  *			    value and the specified route destination on the

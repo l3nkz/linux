@@ -5,10 +5,15 @@
  *  Copyright (C) 2000-2002 Russell King
  *  modification for nommu, Hyok S. Choi, 2004
  *
- *  Note: this file should not be included by non-asm/.h files
+ *  Note: this file should not be included explicitly, include <asm/page.h>
+ *  to get access to these definitions.
  */
 #ifndef __ASM_ARM_MEMORY_H
 #define __ASM_ARM_MEMORY_H
+
+#ifndef _ASMARM_PAGE_H
+#error "Do not include <asm/memory.h> directly"
+#endif
 
 #include <linux/compiler.h>
 #include <linux/const.h>
@@ -20,8 +25,14 @@
 #endif
 #include <asm/kasan_def.h>
 
-/* PAGE_OFFSET - the virtual address of the start of the kernel image */
+/*
+ * PAGE_OFFSET: the virtual address of the start of lowmem, memory above
+ *   the virtual address range for userspace.
+ * KERNEL_OFFSET: the virtual address of the start of the kernel image.
+ *   we may further offset this with TEXT_OFFSET in practice.
+ */
 #define PAGE_OFFSET		UL(CONFIG_PAGE_OFFSET)
+#define KERNEL_OFFSET		(PAGE_OFFSET)
 
 #ifdef CONFIG_MMU
 
@@ -153,6 +164,14 @@ extern unsigned long vectors_base;
 #ifndef __ASSEMBLY__
 
 /*
+ * Physical start and end address of the kernel sections. These addresses are
+ * 2MB-aligned to match the section mappings placed over the kernel. We use
+ * u64 so that LPAE mappings beyond the 32bit limit will work out as well.
+ */
+extern u64 kernel_sec_start;
+extern u64 kernel_sec_end;
+
+/*
  * Physical vs virtual RAM address space conversion.  These are
  * private definitions which should NOT be used outside memory.h
  * files.  Use virt_to_phys/phys_to_virt/__pa/__va instead.
@@ -274,10 +293,12 @@ static inline unsigned long __phys_to_virt(phys_addr_t x)
 
 #endif
 
-#define virt_to_pfn(kaddr) \
-	((((unsigned long)(kaddr) - PAGE_OFFSET) >> PAGE_SHIFT) + \
-	 PHYS_PFN_OFFSET)
-
+static inline unsigned long virt_to_pfn(const void *p)
+{
+	unsigned long kaddr = (unsigned long)p;
+	return (((kaddr - PAGE_OFFSET) >> PAGE_SHIFT) +
+		PHYS_PFN_OFFSET);
+}
 #define __pa_symbol_nodebug(x)	__virt_to_phys_nodebug((x))
 
 #ifdef CONFIG_DEBUG_VIRTUAL
@@ -356,19 +377,6 @@ static inline unsigned long __virt_to_idmap(unsigned long x)
 #define virt_to_idmap(x)	__virt_to_idmap((unsigned long)(x))
 
 /*
- * Virtual <-> DMA view memory address translations
- * Again, these are *only* valid on the kernel direct mapped RAM
- * memory.  Use of these is *deprecated* (and that doesn't mean
- * use the __ prefixed forms instead.)  See dma-mapping.h.
- */
-#ifndef __virt_to_bus
-#define __virt_to_bus	__virt_to_phys
-#define __bus_to_virt	__phys_to_virt
-#define __pfn_to_bus(x)	__pfn_to_phys(x)
-#define __bus_to_pfn(x)	__phys_to_pfn(x)
-#endif
-
-/*
  * Conversion between a struct page and a physical address.
  *
  *  page_to_pfn(page)	convert a struct page * to a PFN number
@@ -384,7 +392,5 @@ static inline unsigned long __virt_to_idmap(unsigned long x)
 					&& pfn_valid(virt_to_pfn(kaddr)))
 
 #endif
-
-#include <asm-generic/memory_model.h>
 
 #endif

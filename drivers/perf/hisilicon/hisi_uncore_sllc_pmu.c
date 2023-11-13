@@ -2,7 +2,7 @@
 /*
  * HiSilicon SLLC uncore Hardware event counters support
  *
- * Copyright (C) 2020 Hisilicon Limited
+ * Copyright (C) 2020 HiSilicon Limited
  * Author: Shaokun Zhang <zhangshaokun@hisilicon.com>
  *
  * This code is based on the uncore PMUs like arm-cci and arm-ccn.
@@ -366,7 +366,7 @@ static struct attribute *hisi_sllc_pmu_identifier_attrs[] = {
 	NULL
 };
 
-static struct attribute_group hisi_sllc_pmu_identifier_group = {
+static const struct attribute_group hisi_sllc_pmu_identifier_group = {
 	.attrs = hisi_sllc_pmu_identifier_attrs,
 };
 
@@ -445,27 +445,13 @@ static int hisi_sllc_pmu_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	sllc_pmu->pmu = (struct pmu) {
-		.module		= THIS_MODULE,
-		.task_ctx_nr	= perf_invalid_context,
-		.event_init	= hisi_uncore_pmu_event_init,
-		.pmu_enable	= hisi_uncore_pmu_enable,
-		.pmu_disable	= hisi_uncore_pmu_disable,
-		.add		= hisi_uncore_pmu_add,
-		.del		= hisi_uncore_pmu_del,
-		.start		= hisi_uncore_pmu_start,
-		.stop		= hisi_uncore_pmu_stop,
-		.read		= hisi_uncore_pmu_read,
-		.attr_groups    = sllc_pmu->pmu_events.attr_groups,
-		.capabilities	= PERF_PMU_CAP_NO_EXCLUDE,
-	};
+	hisi_pmu_init(sllc_pmu, THIS_MODULE);
 
 	ret = perf_pmu_register(&sllc_pmu->pmu, name, -1);
 	if (ret) {
 		dev_err(sllc_pmu->dev, "PMU register failed, ret = %d\n", ret);
 		cpuhp_state_remove_instance(CPUHP_AP_PERF_ARM_HISI_SLLC_ONLINE,
 					    &sllc_pmu->node);
-		irq_set_affinity_hint(sllc_pmu->irq, NULL);
 		return ret;
 	}
 
@@ -481,8 +467,6 @@ static int hisi_sllc_pmu_remove(struct platform_device *pdev)
 	perf_pmu_unregister(&sllc_pmu->pmu);
 	cpuhp_state_remove_instance_nocalls(CPUHP_AP_PERF_ARM_HISI_SLLC_ONLINE,
 					    &sllc_pmu->node);
-	irq_set_affinity_hint(sllc_pmu->irq, NULL);
-
 	return 0;
 }
 

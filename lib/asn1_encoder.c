@@ -164,8 +164,6 @@ asn1_encode_oid(unsigned char *data, const unsigned char *end_data,
 
 	data_len -= 3;
 
-	ret = 0;
-
 	for (i = 2; i < oid_len; i++) {
 		ret = asn1_encode_oid_digit(&d, &data_len, oid[i]);
 		if (ret < 0)
@@ -181,7 +179,7 @@ EXPORT_SYMBOL_GPL(asn1_encode_oid);
 /**
  * asn1_encode_length() - encode a length to follow an ASN.1 tag
  * @data: pointer to encode at
- * @data_len: pointer to remaning length (adjusted by routine)
+ * @data_len: pointer to remaining length (adjusted by routine)
  * @len: length to encode
  *
  * This routine can encode lengths up to 65535 using the ASN.1 rules.

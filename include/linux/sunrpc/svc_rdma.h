@@ -90,9 +90,9 @@ struct svcxprt_rdma {
 	struct ib_pd         *sc_pd;
 
 	spinlock_t	     sc_send_lock;
-	struct list_head     sc_send_ctxts;
+	struct llist_head    sc_send_ctxts;
 	spinlock_t	     sc_rw_ctxt_lock;
-	struct list_head     sc_rw_ctxts;
+	struct llist_head    sc_rw_ctxts;
 
 	u32		     sc_pending_recvs;
 	u32		     sc_recv_batch;
@@ -135,7 +135,6 @@ struct svc_rdma_recv_ctxt {
 	struct ib_sge		rc_recv_sge;
 	void			*rc_recv_buf;
 	struct xdr_stream	rc_stream;
-	bool			rc_temp;
 	u32			rc_byte_len;
 	unsigned int		rc_page_count;
 	u32			rc_inv_rkey;
@@ -150,17 +149,17 @@ struct svc_rdma_recv_ctxt {
 };
 
 struct svc_rdma_send_ctxt {
-	struct list_head	sc_list;
+	struct llist_node	sc_node;
 	struct rpc_rdma_cid	sc_cid;
 
 	struct ib_send_wr	sc_send_wr;
 	struct ib_cqe		sc_cqe;
-	struct completion	sc_done;
 	struct xdr_buf		sc_hdrbuf;
 	struct xdr_stream	sc_stream;
 	void			*sc_xprt_buf;
+	int			sc_page_count;
 	int			sc_cur_sge_no;
-
+	struct page		*sc_pages[RPCSVC_MAXPAGES];
 	struct ib_sge		sc_sges[];
 };
 
@@ -176,7 +175,7 @@ extern struct svc_rdma_recv_ctxt *
 extern void svc_rdma_recv_ctxt_put(struct svcxprt_rdma *rdma,
 				   struct svc_rdma_recv_ctxt *ctxt);
 extern void svc_rdma_flush_recv_queues(struct svcxprt_rdma *rdma);
-extern void svc_rdma_release_rqst(struct svc_rqst *rqstp);
+extern void svc_rdma_release_ctxt(struct svc_xprt *xprt, void *ctxt);
 extern int svc_rdma_recvfrom(struct svc_rqst *);
 
 /* svc_rdma_rw.c */
@@ -207,6 +206,7 @@ extern void svc_rdma_send_error_msg(struct svcxprt_rdma *rdma,
 				    struct svc_rdma_send_ctxt *sctxt,
 				    struct svc_rdma_recv_ctxt *rctxt,
 				    int status);
+extern void svc_rdma_wake_send_waiters(struct svcxprt_rdma *rdma, int avail);
 extern int svc_rdma_sendto(struct svc_rqst *);
 extern int svc_rdma_result_payload(struct svc_rqst *rqstp, unsigned int offset,
 				   unsigned int length);

@@ -89,16 +89,28 @@ static inline void remap_stack_and_trap(void)
 		"addl %4,%%ebx ; movl %%eax, (%%ebx) ;"
 		"int $3"
 		: :
-		"g" (~(UM_KERN_PAGE_SIZE - 1)),
+		"g" (~(STUB_DATA_PAGES * UM_KERN_PAGE_SIZE - 1)),
 		"g" (STUB_MMAP_NR),
 		"g" (UML_STUB_FIELD_FD),
 		"g" (UML_STUB_FIELD_OFFSET),
 		"g" (UML_STUB_FIELD_CHILD_ERR),
-		"c" (UM_KERN_PAGE_SIZE),
+		"c" (STUB_DATA_PAGES * UM_KERN_PAGE_SIZE),
 		"d" (PROT_READ | PROT_WRITE),
 		"S" (MAP_FIXED | MAP_SHARED)
 		:
 		"memory");
 }
 
+static __always_inline void *get_stub_data(void)
+{
+	unsigned long ret;
+
+	asm volatile (
+		"movl %%esp,%0 ;"
+		"andl %1,%0"
+		: "=a" (ret)
+		: "g" (~(STUB_DATA_PAGES * UM_KERN_PAGE_SIZE - 1)));
+
+	return (void *)ret;
+}
 #endif

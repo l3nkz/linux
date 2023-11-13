@@ -269,7 +269,7 @@ static int of_ipmi_probe(struct platform_device *pdev)
 	}
 
 	memset(&io, 0, sizeof(io));
-	io.si_type	= (enum si_type) match->data;
+	io.si_type	= (unsigned long) match->data;
 	io.addr_source	= SI_DEVICETREE;
 	io.irq_setup	= ipmi_std_irq_setup;
 
@@ -381,7 +381,7 @@ static int acpi_ipmi_probe(struct platform_device *pdev)
 	dev_info(dev, "%pR regsize %d spacing %d irq %d\n",
 		 res, io.regsize, io.regspacing, io.irq);
 
-	request_module("acpi_ipmi");
+	request_module_nowait("acpi_ipmi");
 
 	return ipmi_si_add_smi(&io);
 }
@@ -411,7 +411,9 @@ static int ipmi_probe(struct platform_device *pdev)
 
 static int ipmi_remove(struct platform_device *pdev)
 {
-	return ipmi_si_remove_by_dev(&pdev->dev);
+	ipmi_si_remove_by_dev(&pdev->dev);
+
+	return 0;
 }
 
 static int pdev_match_name(struct device *dev, const void *data)

@@ -13,6 +13,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/panic_notifier.h>
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/list.h>
@@ -22,7 +23,7 @@
 #include "pvpanic.h"
 
 MODULE_AUTHOR("Mihai Carabas <mihai.carabas@oracle.com>");
-MODULE_DESCRIPTION("pvpanic device driver ");
+MODULE_DESCRIPTION("pvpanic device driver");
 MODULE_LICENSE("GPL");
 
 static struct list_head pvpanic_list;
@@ -33,7 +34,9 @@ pvpanic_send_event(unsigned int event)
 {
 	struct pvpanic_instance *pi_cur;
 
-	spin_lock(&pvpanic_lock);
+	if (!spin_trylock(&pvpanic_lock))
+		return;
+
 	list_for_each_entry(pi_cur, &pvpanic_list, list) {
 		if (event & pi_cur->capability & pi_cur->events)
 			iowrite8(event, pi_cur->base);
@@ -42,8 +45,7 @@ pvpanic_send_event(unsigned int event)
 }
 
 static int
-pvpanic_panic_notify(struct notifier_block *nb, unsigned long code,
-		     void *unused)
+pvpanic_panic_notify(struct notifier_block *nb, unsigned long code, void *unused)
 {
 	unsigned int event = PVPANIC_PANICKED;
 
@@ -55,30 +57,19 @@ pvpanic_panic_notify(struct notifier_block *nb, unsigned long code,
 	return NOTIFY_DONE;
 }
 
+/*
+ * Call our notifier very early on panic, deferring the
+ * action taken to the hypervisor.
+ */
 static struct notifier_block pvpanic_panic_nb = {
 	.notifier_call = pvpanic_panic_notify,
-	.priority = 1, /* let this called before broken drm_fb_helper */
+	.priority = INT_MAX,
 };
 
-int pvpanic_probe(struct pvpanic_instance *pi)
-{
-	if (!pi || !pi->base)
-		return -EINVAL;
-
-	spin_lock(&pvpanic_lock);
-	list_add(&pi->list, &pvpanic_list);
-	spin_unlock(&pvpanic_lock);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(pvpanic_probe);
-
-void pvpanic_remove(struct pvpanic_instance *pi)
+static void pvpanic_remove(void *param)
 {
 	struct pvpanic_instance *pi_cur, *pi_next;
-
-	if (!pi)
-		return;
+	struct pvpanic_instance *pi = param;
 
 	spin_lock(&pvpanic_lock);
 	list_for_each_entry_safe(pi_cur, pi_next, &pvpanic_list, list) {
@@ -89,25 +80,36 @@ void pvpanic_remove(struct pvpanic_instance *pi)
 	}
 	spin_unlock(&pvpanic_lock);
 }
-EXPORT_SYMBOL_GPL(pvpanic_remove);
+
+int devm_pvpanic_probe(struct device *dev, struct pvpanic_instance *pi)
+{
+	if (!pi || !pi->base)
+		return -EINVAL;
+
+	spin_lock(&pvpanic_lock);
+	list_add(&pi->list, &pvpanic_list);
+	spin_unlock(&pvpanic_lock);
+
+	dev_set_drvdata(dev, pi);
+
+	return devm_add_action_or_reset(dev, pvpanic_remove, pi);
+}
+EXPORT_SYMBOL_GPL(devm_pvpanic_probe);
 
 static int pvpanic_init(void)
 {
 	INIT_LIST_HEAD(&pvpanic_list);
 	spin_lock_init(&pvpanic_lock);
 
-	atomic_notifier_chain_register(&panic_notifier_list,
-				       &pvpanic_panic_nb);
+	atomic_notifier_chain_register(&panic_notifier_list, &pvpanic_panic_nb);
 
 	return 0;
 }
+module_init(pvpanic_init);
 
 static void pvpanic_exit(void)
 {
-	atomic_notifier_chain_unregister(&panic_notifier_list,
-					 &pvpanic_panic_nb);
+	atomic_notifier_chain_unregister(&panic_notifier_list, &pvpanic_panic_nb);
 
 }
-
-module_init(pvpanic_init);
 module_exit(pvpanic_exit);

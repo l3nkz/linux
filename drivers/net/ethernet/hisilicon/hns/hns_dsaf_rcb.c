@@ -11,10 +11,6 @@
 #include <linux/etherdevice.h>
 #include <asm/cacheflush.h>
 #include <linux/platform_device.h>
-#include <linux/of.h>
-#include <linux/of_address.h>
-#include <linux/of_platform.h>
-#include <linux/of_irq.h>
 #include <linux/spinlock.h>
 
 #include "hns_dsaf_main.h"
@@ -913,7 +909,7 @@ int hns_rcb_get_common_regs_count(void)
 }
 
 /**
- *rcb_get_sset_count - rcb ring regs count
+ *hns_rcb_get_ring_regs_count - rcb ring regs count
  *return regs count
  */
 int hns_rcb_get_ring_regs_count(void)

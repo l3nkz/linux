@@ -34,7 +34,6 @@
 
 struct aspeed_vuart {
 	struct device		*dev;
-	void __iomem		*regs;
 	struct clk		*clk;
 	int			line;
 	struct timer_list	unthrottle_timer;
@@ -64,16 +63,26 @@ static const int unthrottle_timeout = HZ/10;
  * different system (though most of them use 3f8/4).
  */
 
+static inline u8 aspeed_vuart_readb(struct aspeed_vuart *vuart, u8 reg)
+{
+	return readb(vuart->port->port.membase + reg);
+}
+
+static inline void aspeed_vuart_writeb(struct aspeed_vuart *vuart, u8 val, u8 reg)
+{
+	writeb(val, vuart->port->port.membase + reg);
+}
+
 static ssize_t lpc_address_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct aspeed_vuart *vuart = dev_get_drvdata(dev);
 	u16 addr;
 
-	addr = (readb(vuart->regs + ASPEED_VUART_ADDRH) << 8) |
-		(readb(vuart->regs + ASPEED_VUART_ADDRL));
+	addr = (aspeed_vuart_readb(vuart, ASPEED_VUART_ADDRH) << 8) |
+		(aspeed_vuart_readb(vuart, ASPEED_VUART_ADDRL));
 
-	return snprintf(buf, PAGE_SIZE - 1, "0x%x\n", addr);
+	return sysfs_emit(buf, "0x%x\n", addr);
 }
 
 static int aspeed_vuart_set_lpc_address(struct aspeed_vuart *vuart, u32 addr)
@@ -81,8 +90,8 @@ static int aspeed_vuart_set_lpc_address(struct aspeed_vuart *vuart, u32 addr)
 	if (addr > U16_MAX)
 		return -EINVAL;
 
-	writeb(addr >> 8, vuart->regs + ASPEED_VUART_ADDRH);
-	writeb(addr >> 0, vuart->regs + ASPEED_VUART_ADDRL);
+	aspeed_vuart_writeb(vuart, addr >> 8, ASPEED_VUART_ADDRH);
+	aspeed_vuart_writeb(vuart, addr >> 0, ASPEED_VUART_ADDRL);
 
 	return 0;
 }
@@ -111,11 +120,11 @@ static ssize_t sirq_show(struct device *dev,
 	struct aspeed_vuart *vuart = dev_get_drvdata(dev);
 	u8 reg;
 
-	reg = readb(vuart->regs + ASPEED_VUART_GCRB);
+	reg = aspeed_vuart_readb(vuart, ASPEED_VUART_GCRB);
 	reg &= ASPEED_VUART_GCRB_HOST_SIRQ_MASK;
 	reg >>= ASPEED_VUART_GCRB_HOST_SIRQ_SHIFT;
 
-	return snprintf(buf, PAGE_SIZE - 1, "%u\n", reg);
+	return sysfs_emit(buf, "%u\n", reg);
 }
 
 static int aspeed_vuart_set_sirq(struct aspeed_vuart *vuart, u32 sirq)
@@ -128,10 +137,10 @@ static int aspeed_vuart_set_sirq(struct aspeed_vuart *vuart, u32 sirq)
 	sirq <<= ASPEED_VUART_GCRB_HOST_SIRQ_SHIFT;
 	sirq &= ASPEED_VUART_GCRB_HOST_SIRQ_MASK;
 
-	reg = readb(vuart->regs + ASPEED_VUART_GCRB);
+	reg = aspeed_vuart_readb(vuart, ASPEED_VUART_GCRB);
 	reg &= ~ASPEED_VUART_GCRB_HOST_SIRQ_MASK;
 	reg |= sirq;
-	writeb(reg, vuart->regs + ASPEED_VUART_GCRB);
+	aspeed_vuart_writeb(vuart, reg, ASPEED_VUART_GCRB);
 
 	return 0;
 }
@@ -159,23 +168,23 @@ static ssize_t sirq_polarity_show(struct device *dev,
 	struct aspeed_vuart *vuart = dev_get_drvdata(dev);
 	u8 reg;
 
-	reg = readb(vuart->regs + ASPEED_VUART_GCRA);
+	reg = aspeed_vuart_readb(vuart, ASPEED_VUART_GCRA);
 	reg &= ASPEED_VUART_GCRA_HOST_SIRQ_POLARITY;
 
-	return snprintf(buf, PAGE_SIZE - 1, "%u\n", reg ? 1 : 0);
+	return sysfs_emit(buf, "%u\n", reg ? 1 : 0);
 }
 
 static void aspeed_vuart_set_sirq_polarity(struct aspeed_vuart *vuart,
 					   bool polarity)
 {
-	u8 reg = readb(vuart->regs + ASPEED_VUART_GCRA);
+	u8 reg = aspeed_vuart_readb(vuart, ASPEED_VUART_GCRA);
 
 	if (polarity)
 		reg |= ASPEED_VUART_GCRA_HOST_SIRQ_POLARITY;
 	else
 		reg &= ~ASPEED_VUART_GCRA_HOST_SIRQ_POLARITY;
 
-	writeb(reg, vuart->regs + ASPEED_VUART_GCRA);
+	aspeed_vuart_writeb(vuart, reg, ASPEED_VUART_GCRA);
 }
 
 static ssize_t sirq_polarity_store(struct device *dev,
@@ -210,14 +219,14 @@ static const struct attribute_group aspeed_vuart_attr_group = {
 
 static void aspeed_vuart_set_enabled(struct aspeed_vuart *vuart, bool enabled)
 {
-	u8 reg = readb(vuart->regs + ASPEED_VUART_GCRA);
+	u8 reg = aspeed_vuart_readb(vuart, ASPEED_VUART_GCRA);
 
 	if (enabled)
 		reg |= ASPEED_VUART_GCRA_VUART_EN;
 	else
 		reg &= ~ASPEED_VUART_GCRA_VUART_EN;
 
-	writeb(reg, vuart->regs + ASPEED_VUART_GCRA);
+	aspeed_vuart_writeb(vuart, reg, ASPEED_VUART_GCRA);
 }
 
 static void aspeed_vuart_set_host_tx_discard(struct aspeed_vuart *vuart,
@@ -225,7 +234,7 @@ static void aspeed_vuart_set_host_tx_discard(struct aspeed_vuart *vuart,
 {
 	u8 reg;
 
-	reg = readb(vuart->regs + ASPEED_VUART_GCRA);
+	reg = aspeed_vuart_readb(vuart, ASPEED_VUART_GCRA);
 
 	/* If the DISABLE_HOST_TX_DISCARD bit is set, discard is disabled */
 	if (!discard)
@@ -233,7 +242,7 @@ static void aspeed_vuart_set_host_tx_discard(struct aspeed_vuart *vuart,
 	else
 		reg &= ~ASPEED_VUART_GCRA_DISABLE_HOST_TX_DISCARD;
 
-	writeb(reg, vuart->regs + ASPEED_VUART_GCRA);
+	aspeed_vuart_writeb(vuart, reg, ASPEED_VUART_GCRA);
 }
 
 static int aspeed_vuart_startup(struct uart_port *uart_port)
@@ -265,6 +274,9 @@ static void __aspeed_vuart_set_throttle(struct uart_8250_port *up,
 		bool throttle)
 {
 	unsigned char irqs = UART_IER_RLSI | UART_IER_RDI;
+
+	/* Port locked to synchronize UART_IER access against the console. */
+	lockdep_assert_held_once(&up->port.lock);
 
 	up->ier &= ~irqs;
 	if (!throttle)
@@ -320,14 +332,15 @@ static int aspeed_vuart_handle_irq(struct uart_port *port)
 {
 	struct uart_8250_port *up = up_to_u8250p(port);
 	unsigned int iir, lsr;
-	int space, count;
+	unsigned long flags;
+	unsigned int space, count;
 
 	iir = serial_port_in(port, UART_IIR);
 
 	if (iir & UART_IIR_NO_INT)
 		return 0;
 
-	spin_lock(&port->lock);
+	spin_lock_irqsave(&port->lock, flags);
 
 	lsr = serial_port_in(port, UART_LSR);
 
@@ -339,14 +352,12 @@ static int aspeed_vuart_handle_irq(struct uart_port *port)
 			struct aspeed_vuart *vuart = port->private_data;
 			__aspeed_vuart_set_throttle(up, true);
 
-			if (!timer_pending(&vuart->unthrottle_timer)) {
-				vuart->port = up;
+			if (!timer_pending(&vuart->unthrottle_timer))
 				mod_timer(&vuart->unthrottle_timer,
 					  jiffies + unthrottle_timeout);
-			}
 
 		} else {
-			count = min(space, 256);
+			count = min(space, 256U);
 
 			do {
 				serial8250_read_char(up, lsr);
@@ -363,7 +374,7 @@ static int aspeed_vuart_handle_irq(struct uart_port *port)
 	if (lsr & UART_LSR_THRE)
 		serial8250_tx_chars(up);
 
-	uart_unlock_and_check_sysrq(port);
+	uart_unlock_and_check_sysrq_irqrestore(port, flags);
 
 	return 1;
 }
@@ -421,13 +432,11 @@ static int aspeed_vuart_probe(struct platform_device *pdev)
 	timer_setup(&vuart->unthrottle_timer, aspeed_vuart_unthrottle_exp, 0);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	vuart->regs = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(vuart->regs))
-		return PTR_ERR(vuart->regs);
+	if (!res)
+		return -EINVAL;
 
 	memset(&port, 0, sizeof(port));
 	port.port.private_data = vuart;
-	port.port.membase = vuart->regs;
 	port.port.mapbase = res->start;
 	port.port.mapsize = resource_size(res);
 	port.port.startup = aspeed_vuart_startup;
@@ -483,9 +492,9 @@ static int aspeed_vuart_probe(struct platform_device *pdev)
 	port.port.irq = irq_of_parse_and_map(np, 0);
 	port.port.handle_irq = aspeed_vuart_handle_irq;
 	port.port.iotype = UPIO_MEM;
-	port.port.type = PORT_16550A;
+	port.port.type = PORT_ASPEED_VUART;
 	port.port.uartclk = clk;
-	port.port.flags = UPF_SHARE_IRQ | UPF_BOOT_AUTOCONF
+	port.port.flags = UPF_SHARE_IRQ | UPF_BOOT_AUTOCONF | UPF_IOREMAP
 		| UPF_FIXED_PORT | UPF_FIXED_TYPE | UPF_NO_THRE_TEST;
 
 	if (of_property_read_bool(np, "no-loopback-test"))
@@ -502,6 +511,7 @@ static int aspeed_vuart_probe(struct platform_device *pdev)
 		goto err_clk_disable;
 
 	vuart->line = rc;
+	vuart->port = serial8250_get_port(vuart->line);
 
 	rc = of_parse_phandle_with_fixed_args(
 		np, "aspeed,sirq-polarity-sense", 2, 0,

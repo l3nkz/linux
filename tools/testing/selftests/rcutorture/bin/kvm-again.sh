@@ -12,9 +12,8 @@
 scriptname=$0
 args="$*"
 
-T=${TMPDIR-/tmp}/kvm-again.sh.$$
+T="`mktemp -d ${TMPDIR-/tmp}/kvm-again.sh.XXXXXX`"
 trap 'rm -rf $T' 0
-mkdir $T
 
 if ! test -d tools/testing/selftests/rcutorture/bin
 then
@@ -29,7 +28,7 @@ then
 	echo "Usage: $scriptname /path/to/old/run [ options ]"
 	exit 1
 fi
-if ! cp "$oldrun/batches" $T/batches.oldrun
+if ! cp "$oldrun/scenarios" $T/scenarios.oldrun
 then
 	# Later on, can reconstitute this from console.log files.
 	echo Prior run batches file does not exist: $oldrun/batches
@@ -47,31 +46,60 @@ else
 	exit 1
 fi
 
-KVM="`pwd`/tools/testing/selftests/rcutorture"; export KVM
-PATH=${KVM}/bin:$PATH; export PATH
+RCUTORTURE="`pwd`/tools/testing/selftests/rcutorture"; export RCUTORTURE
+PATH=${RCUTORTURE}/bin:$PATH; export PATH
 . functions.sh
 
+bootargs=
 dryrun=
 dur=
 default_link="cp -R"
-rundir="`pwd`/tools/testing/selftests/rcutorture/res/`date +%Y.%m.%d-%H.%M.%S-again`"
+resdir="`pwd`/tools/testing/selftests/rcutorture/res"
+rundir="$resdir/`date +%Y.%m.%d-%H.%M.%S-again`"
+got_datestamp=
+got_rundir=
 
 startdate="`date`"
 starttime="`get_starttime`"
 
 usage () {
 	echo "Usage: $scriptname $oldrun [ arguments ]:"
+	echo "       --bootargs kernel-boot-arguments"
+	echo "       --datestamp string"
 	echo "       --dryrun"
 	echo "       --duration minutes | <seconds>s | <hours>h | <days>d"
 	echo "       --link hard|soft|copy"
 	echo "       --remote"
 	echo "       --rundir /new/res/path"
+	echo "Command line: $scriptname $args"
 	exit 1
 }
 
 while test $# -gt 0
 do
 	case "$1" in
+	--bootargs|--bootarg)
+		checkarg --bootargs "(list of kernel boot arguments)" "$#" "$2" '.*' '^--'
+		bootargs="$bootargs $2"
+		shift
+		;;
+	--datestamp)
+		checkarg --datestamp "(relative pathname)" "$#" "$2" '^[a-zA-Z0-9._/-]*$' '^--'
+		if test -n "$got_rundir" || test -n "$got_datestamp"
+		then
+			echo Only one of --datestamp or --rundir may be specified
+			usage
+		fi
+		got_datestamp=y
+		ds=$2
+		rundir="$resdir/$ds"
+		if test -e "$rundir"
+		then
+			echo "--datestamp $2: Already exists."
+			usage
+		fi
+		shift
+		;;
 	--dryrun)
 		dryrun=1
 		;;
@@ -113,6 +141,12 @@ do
 		;;
 	--rundir)
 		checkarg --rundir "(absolute pathname)" "$#" "$2" '^/' '^error'
+		if test -n "$got_rundir" || test -n "$got_datestamp"
+		then
+			echo Only one of --datestamp or --rundir may be specified
+			usage
+		fi
+		got_rundir=y
 		rundir=$2
 		if test -e "$rundir"
 		then
@@ -122,8 +156,11 @@ do
 		shift
 		;;
 	*)
-		echo Unknown argument $1
-		usage
+		if test -n "$1"
+		then
+			echo Unknown argument $1
+			usage
+		fi
 		;;
 	esac
 	shift
@@ -142,7 +179,9 @@ then
 	echo "Cannot copy from $oldrun to $rundir."
 	usage
 fi
-rm -f "$rundir"/*/{console.log,console.log.diags,qemu_pid,qemu-retval,Warnings,kvm-test-1-run.sh.out,kvm-test-1-run-qemu.sh.out,vmlinux} "$rundir"/log
+rm -f "$rundir"/*/{console.log,console.log.diags,qemu_pid,qemu-pid,qemu-retval,Warnings,kvm-test-1-run.sh.out,kvm-test-1-run-qemu.sh.out,vmlinux} "$rundir"/log
+touch "$rundir/log"
+echo $scriptname $args | tee -a "$rundir/log"
 echo $oldrun > "$rundir/re-run"
 if ! test -d "$rundir/../../bin"
 then
@@ -154,7 +193,7 @@ do
 	qemu_cmd_dir="`dirname "$i"`"
 	kernel_dir="`echo $qemu_cmd_dir | sed -e 's/\.[0-9]\+$//'`"
 	jitter_dir="`dirname "$kernel_dir"`"
-	kvm-transform.sh "$kernel_dir/bzImage" "$qemu_cmd_dir/console.log" "$jitter_dir" $dur < $T/qemu-cmd > $i
+	kvm-transform.sh "$kernel_dir/bzImage" "$qemu_cmd_dir/console.log" "$jitter_dir" "$dur" "$bootargs" < $T/qemu-cmd > $i
 	if test -n "$arg_remote"
 	then
 		echo "# TORTURE_KCONFIG_GDB_ARG=''" >> $i
@@ -165,35 +204,18 @@ done
 grep '^#' $i | sed -e 's/^# //' > $T/qemu-cmd-settings
 . $T/qemu-cmd-settings
 
-grep -v '^#' $T/batches.oldrun | awk '
-BEGIN {
-	oldbatch = 1;
-}
-
+grep -v '^#' $T/scenarios.oldrun | awk '
 {
-	if (oldbatch != $1) {
-		print "kvm-test-1-run-batch.sh" curbatch;
-		curbatch = "";
-		oldbatch = $1;
-	}
-	curbatch = curbatch " " $2;
-}
-
-END {
-	print "kvm-test-1-run-batch.sh" curbatch
+	curbatch = "";
+	for (i = 2; i <= NF; i++)
+		curbatch = curbatch " " $i;
+	print "kvm-test-1-run-batch.sh" curbatch;
 }' > $T/runbatches.sh
 
 if test -n "$dryrun"
 then
 	echo ---- Dryrun complete, directory: $rundir | tee -a "$rundir/log"
 else
-	( cd "$rundir"; sh $T/runbatches.sh )
-	kcsan-collapse.sh "$rundir" | tee -a "$rundir/log"
-	echo | tee -a "$rundir/log"
-	echo ---- Results directory: $rundir | tee -a "$rundir/log"
-	kvm-recheck.sh "$rundir" > $T/kvm-recheck.sh.out 2>&1
-	ret=$?
-	cat $T/kvm-recheck.sh.out | tee -a "$rundir/log"
-	echo " --- Done at `date` (`get_starttime_duration $starttime`) exitcode $ret" | tee -a "$rundir/log"
-	exit $ret
+	( cd "$rundir"; sh $T/runbatches.sh ) | tee -a "$rundir/log"
+	kvm-end-run-stats.sh "$rundir" "$starttime"
 fi

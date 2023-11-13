@@ -18,6 +18,7 @@
 #include <linux/kernel.h>
 #include <linux/libfdt.h>
 #include <linux/of_fdt.h>
+#include <linux/panic_notifier.h>
 #include <linux/sched/task.h>
 #include <linux/start_kernel.h>
 #include <linux/string.h>
@@ -339,7 +340,7 @@ void *__init relocate_kernel(void)
 	early_init_dt_scan(fdt);
 	if (boot_command_line[0]) {
 		/* Boot command line was passed in device tree */
-		strlcpy(arcs_cmdline, boot_command_line, COMMAND_LINE_SIZE);
+		strscpy(arcs_cmdline, boot_command_line, COMMAND_LINE_SIZE);
 	}
 #endif /* CONFIG_USE_OF */
 

@@ -17,24 +17,28 @@ description:
   to be the same.
 
 allOf:
-  - $ref: "regulator.yaml#"
-
-if:
-  properties:
-    compatible:
-      contains:
-        const: regulator-fixed-clock
-  required:
-    - clocks
-else:
-  if:
-    properties:
-      compatible:
-        contains:
-          const: regulator-fixed-domain
-    required:
-      - power-domains
-      - required-opps
+  - $ref: regulator.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: regulator-fixed-clock
+    then:
+      required:
+        - clocks
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: regulator-fixed-domain
+    then:
+      required:
+        - power-domains
+        - required-opps
+  - not:
+      required:
+        - gpio
+        - gpios
 
 properties:
   compatible:
@@ -49,6 +53,9 @@ properties:
     description: gpio to use for enable control
     maxItems: 1
 
+  gpios:
+    maxItems: 1
+
   clocks:
     description:
       clock to use for enable control. This binding is only available if
@@ -57,12 +64,14 @@ properties:
     maxItems: 1
 
   power-domains:
+    deprecated: true
     description:
       Power domain to use for enable control. This binding is only
       available if the compatible is chosen to regulator-fixed-domain.
     maxItems: 1
 
   required-opps:
+    deprecated: true
     description:
       Performance state to use for enable control. This binding is only
       available if the compatible is chosen to regulator-fixed-domain. The

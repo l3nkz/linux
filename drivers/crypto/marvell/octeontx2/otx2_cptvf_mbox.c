@@ -5,6 +5,48 @@
 #include "otx2_cptvf.h"
 #include <rvu_reg.h>
 
+int otx2_cpt_mbox_bbuf_init(struct otx2_cptvf_dev *cptvf, struct pci_dev *pdev)
+{
+	struct otx2_mbox_dev *mdev;
+	struct otx2_mbox *otx2_mbox;
+
+	cptvf->bbuf_base = devm_kmalloc(&pdev->dev, MBOX_SIZE, GFP_KERNEL);
+	if (!cptvf->bbuf_base)
+		return -ENOMEM;
+	/*
+	 * Overwrite mbox mbase to point to bounce buffer, so that PF/VF
+	 * prepare all mbox messages in bounce buffer instead of directly
+	 * in hw mbox memory.
+	 */
+	otx2_mbox = &cptvf->pfvf_mbox;
+	mdev = &otx2_mbox->dev[0];
+	mdev->mbase = cptvf->bbuf_base;
+
+	return 0;
+}
+
+static void otx2_cpt_sync_mbox_bbuf(struct otx2_mbox *mbox, int devid)
+{
+	u16 msgs_offset = ALIGN(sizeof(struct mbox_hdr), MBOX_MSG_ALIGN);
+	void *hw_mbase = mbox->hwbase + (devid * MBOX_SIZE);
+	struct otx2_mbox_dev *mdev = &mbox->dev[devid];
+	struct mbox_hdr *hdr;
+	u64 msg_size;
+
+	if (mdev->mbase == hw_mbase)
+		return;
+
+	hdr = hw_mbase + mbox->rx_start;
+	msg_size = hdr->msg_size;
+
+	if (msg_size > mbox->rx_size - msgs_offset)
+		msg_size = mbox->rx_size - msgs_offset;
+
+	/* Copy mbox messages from mbox memory to bounce buffer */
+	memcpy(mdev->mbase + mbox->rx_start,
+	       hw_mbase + mbox->rx_start, msg_size + msgs_offset);
+}
+
 irqreturn_t otx2_cptvf_pfvf_mbox_intr(int __always_unused irq, void *arg)
 {
 	struct otx2_cptvf_dev *cptvf = arg;
@@ -106,6 +148,7 @@ void otx2_cptvf_pfvf_mbox_handler(struct work_struct *work)
 
 	cptvf = container_of(work, struct otx2_cptvf_dev, pfvf_mbox_work);
 	pfvf_mbox = &cptvf->pfvf_mbox;
+	otx2_cpt_sync_mbox_bbuf(pfvf_mbox, 0);
 	mdev = &pfvf_mbox->dev[0];
 	rsp_hdr = (struct mbox_hdr *)(mdev->mbase + pfvf_mbox->rx_start);
 	if (rsp_hdr->num_msgs == 0)
@@ -148,7 +191,6 @@ int otx2_cptvf_send_kvf_limits_msg(struct otx2_cptvf_dev *cptvf)
 	struct otx2_mbox *mbox = &cptvf->pfvf_mbox;
 	struct pci_dev *pdev = cptvf->pdev;
 	struct mbox_msghdr *req;
-	int ret;
 
 	req = (struct mbox_msghdr *)
 	      otx2_mbox_alloc_msg_rsp(mbox, 0, sizeof(*req),
@@ -161,7 +203,5 @@ int otx2_cptvf_send_kvf_limits_msg(struct otx2_cptvf_dev *cptvf)
 	req->sig = OTX2_MBOX_REQ_SIG;
 	req->pcifunc = OTX2_CPT_RVU_PFFUNC(cptvf->vf_id, 0);
 
-	ret = otx2_cpt_send_mbox_msg(mbox, pdev);
-
-	return ret;
+	return otx2_cpt_send_mbox_msg(mbox, pdev);
 }

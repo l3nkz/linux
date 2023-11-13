@@ -13,6 +13,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/err.h>
 #include <linux/delay.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/bitops.h>
@@ -48,7 +49,7 @@ struct ad7298_state {
 	 * DMA (thus cache coherency maintenance) requires the
 	 * transfer buffers to live in their own cache lines.
 	 */
-	__be16				rx_buf[12] ____cacheline_aligned;
+	__be16				rx_buf[12] __aligned(IIO_DMA_MINALIGN);
 	__be16				tx_buf[2];
 };
 
@@ -346,6 +347,12 @@ static int ad7298_probe(struct spi_device *spi)
 	return devm_iio_device_register(&spi->dev, indio_dev);
 }
 
+static const struct acpi_device_id ad7298_acpi_ids[] = {
+	{ "INT3494", 0 },
+	{ }
+};
+MODULE_DEVICE_TABLE(acpi, ad7298_acpi_ids);
+
 static const struct spi_device_id ad7298_id[] = {
 	{"ad7298", 0},
 	{}
@@ -355,6 +362,7 @@ MODULE_DEVICE_TABLE(spi, ad7298_id);
 static struct spi_driver ad7298_driver = {
 	.driver = {
 		.name	= "ad7298",
+		.acpi_match_table = ad7298_acpi_ids,
 	},
 	.probe		= ad7298_probe,
 	.id_table	= ad7298_id,

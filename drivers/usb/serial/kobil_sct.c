@@ -53,7 +53,7 @@ static int  kobil_open(struct tty_struct *tty, struct usb_serial_port *port);
 static void kobil_close(struct usb_serial_port *port);
 static int  kobil_write(struct tty_struct *tty, struct usb_serial_port *port,
 			 const unsigned char *buf, int count);
-static int  kobil_write_room(struct tty_struct *tty);
+static unsigned int kobil_write_room(struct tty_struct *tty);
 static int  kobil_ioctl(struct tty_struct *tty,
 			unsigned int cmd, unsigned long arg);
 static int  kobil_tiocmget(struct tty_struct *tty);
@@ -62,7 +62,8 @@ static int  kobil_tiocmset(struct tty_struct *tty,
 static void kobil_read_int_callback(struct urb *urb);
 static void kobil_write_int_callback(struct urb *urb);
 static void kobil_set_termios(struct tty_struct *tty,
-			struct usb_serial_port *port, struct ktermios *old);
+			      struct usb_serial_port *port,
+			      const struct ktermios *old);
 static void kobil_init_termios(struct tty_struct *tty);
 
 static const struct usb_device_id id_table[] = {
@@ -358,7 +359,7 @@ static int kobil_write(struct tty_struct *tty, struct usb_serial_port *port,
 }
 
 
-static int kobil_write_room(struct tty_struct *tty)
+static unsigned int kobil_write_room(struct tty_struct *tty)
 {
 	/* FIXME */
 	return 8;
@@ -474,7 +475,8 @@ static int kobil_tiocmset(struct tty_struct *tty,
 }
 
 static void kobil_set_termios(struct tty_struct *tty,
-			struct usb_serial_port *port, struct ktermios *old)
+			      struct usb_serial_port *port,
+			      const struct ktermios *old)
 {
 	struct kobil_private *priv;
 	int result;

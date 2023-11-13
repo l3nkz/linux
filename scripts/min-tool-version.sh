@@ -14,23 +14,27 @@ fi
 
 case "$1" in
 binutils)
-	echo 2.23.0
+	echo 2.25.0
 	;;
 gcc)
-	# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=63293
-	# https://lore.kernel.org/r/20210107111841.GN1551@shell.armlinux.org.uk
-	if [ "$SRCARCH" = arm64 ]; then
-		echo 5.1.0
+	if [ "$ARCH" = parisc64 ]; then
+		echo 12.0.0
 	else
-		echo 4.9.0
+		echo 5.1.0
 	fi
 	;;
-icc)
-	# temporary
-	echo 16.0.3
-	;;
 llvm)
-	echo 10.0.1
+	if [ "$SRCARCH" = s390 ]; then
+		echo 15.0.0
+	else
+		echo 11.0.0
+	fi
+	;;
+rustc)
+	echo 1.71.1
+	;;
+bindgen)
+	echo 0.65.1
 	;;
 *)
 	echo "$1: unknown tool" >&2

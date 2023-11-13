@@ -9,6 +9,7 @@
 #include <linux/filter.h>
 #include <linux/tracepoint.h>
 #include <linux/bpf.h>
+#include <net/xdp.h>
 
 #define __XDP_ACT_MAP(FN)	\
 	FN(ABORTED)		\
@@ -110,7 +111,11 @@ DECLARE_EVENT_CLASS(xdp_redirect_template,
 		u32 ifindex = 0, map_index = index;
 
 		if (map_type == BPF_MAP_TYPE_DEVMAP || map_type == BPF_MAP_TYPE_DEVMAP_HASH) {
-			ifindex = ((struct _bpf_dtab_netdev *)tgt)->dev->ifindex;
+			/* Just leave to_ifindex to 0 if do broadcast redirect,
+			 * as tgt will be NULL.
+			 */
+			if (tgt)
+				ifindex = ((struct _bpf_dtab_netdev *)tgt)->dev->ifindex;
 		} else if (map_type == BPF_MAP_TYPE_UNSPEC && map_id == INT_MAX) {
 			ifindex = index;
 			map_index = 0;
@@ -398,6 +403,23 @@ TRACE_EVENT(mem_return_failed,
 		  __print_symbolic(__entry->mem_type, __MEM_TYPE_SYM_TAB),
 		  __entry->page
 	)
+);
+
+TRACE_EVENT(bpf_xdp_link_attach_failed,
+
+	TP_PROTO(const char *msg),
+
+	TP_ARGS(msg),
+
+	TP_STRUCT__entry(
+		__string(msg, msg)
+	),
+
+	TP_fast_assign(
+		__assign_str(msg, msg);
+	),
+
+	TP_printk("errmsg=%s", __get_str(msg))
 );
 
 #endif /* _TRACE_XDP_H */

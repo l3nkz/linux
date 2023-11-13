@@ -2,7 +2,7 @@
 /*
  * SSH request transport layer.
  *
- * Copyright (C) 2019-2020 Maximilian Luz <luzmaximilian@gmail.com>
+ * Copyright (C) 2019-2022 Maximilian Luz <luzmaximilian@gmail.com>
  */
 
 #include <asm/unaligned.h>
@@ -863,9 +863,7 @@ static void ssh_rtl_timeout_reap(struct work_struct *work)
 		clear_bit(SSH_REQUEST_SF_PENDING_BIT, &r->state);
 
 		atomic_dec(&rtl->pending.count);
-		list_del(&r->node);
-
-		list_add_tail(&r->node, &claimed);
+		list_move_tail(&r->node, &claimed);
 	}
 	spin_unlock(&rtl->pending.lock);
 
@@ -917,6 +915,21 @@ static void ssh_rtl_rx_command(struct ssh_ptl *p, const struct ssam_span *data)
 
 	if (sshp_parse_command(dev, data, &command, &command_data))
 		return;
+
+	/*
+	 * Check if the message was intended for us. If not, drop it.
+	 *
+	 * Note: We will need to change this to handle debug messages. On newer
+	 * generation devices, these seem to be sent to SSAM_SSH_TID_DEBUG. We
+	 * as host can still receive them as they can be forwarded via an
+	 * override option on SAM, but doing so does not change the target ID
+	 * to SSAM_SSH_TID_HOST.
+	 */
+	if (command->tid != SSAM_SSH_TID_HOST) {
+		rtl_warn(rtl, "rtl: dropping message not intended for us (tid = %#04x)\n",
+			 command->tid);
+		return;
+	}
 
 	if (ssh_rqid_is_event(get_unaligned_le16(&command->rqid)))
 		ssh_rtl_rx_event(rtl, command, &command_data);
@@ -1204,8 +1217,7 @@ void ssh_rtl_shutdown(struct ssh_rtl *rtl)
 		smp_mb__before_atomic();
 		clear_bit(SSH_REQUEST_SF_QUEUED_BIT, &r->state);
 
-		list_del(&r->node);
-		list_add_tail(&r->node, &claimed);
+		list_move_tail(&r->node, &claimed);
 	}
 	spin_unlock(&rtl->queue.lock);
 
@@ -1238,8 +1250,7 @@ void ssh_rtl_shutdown(struct ssh_rtl *rtl)
 			smp_mb__before_atomic();
 			clear_bit(SSH_REQUEST_SF_PENDING_BIT, &r->state);
 
-			list_del(&r->node);
-			list_add_tail(&r->node, &claimed);
+			list_move_tail(&r->node, &claimed);
 		}
 		spin_unlock(&rtl->pending.lock);
 	}

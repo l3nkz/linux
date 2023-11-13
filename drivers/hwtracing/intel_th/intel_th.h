@@ -143,6 +143,7 @@ intel_th_output_assigned(struct intel_th_device *thdev)
  * @remove:	remove method
  * @assign:	match a given output type device against available outputs
  * @unassign:	deassociate an output type device from an output port
+ * @prepare:	prepare output port for tracing
  * @enable:	enable tracing for a given output device
  * @disable:	disable tracing for a given output device
  * @irq:	interrupt callback
@@ -164,6 +165,8 @@ struct intel_th_driver {
 					  struct intel_th_device *othdev);
 	void			(*unassign)(struct intel_th_device *thdev,
 					    struct intel_th_device *othdev);
+	void			(*prepare)(struct intel_th_device *thdev,
+					   struct intel_th_output *output);
 	void			(*enable)(struct intel_th_device *thdev,
 					  struct intel_th_output *output);
 	void			(*trig_switch)(struct intel_th_device *thdev,
@@ -202,7 +205,7 @@ struct intel_th_driver {
  * INTEL_TH_SWITCH and INTEL_TH_SOURCE are children of the intel_th device.
  */
 static inline struct intel_th_device *
-to_intel_th_parent(struct intel_th_device *thdev)
+to_intel_th_parent(const struct intel_th_device *thdev)
 {
 	struct device *parent = thdev->dev.parent;
 
@@ -212,7 +215,7 @@ to_intel_th_parent(struct intel_th_device *thdev)
 	return to_intel_th_device(parent);
 }
 
-static inline struct intel_th *to_intel_th(struct intel_th_device *thdev)
+static inline struct intel_th *to_intel_th(const struct intel_th_device *thdev)
 {
 	if (thdev->type == INTEL_TH_OUTPUT)
 		thdev = to_intel_th_parent(thdev);

@@ -95,7 +95,7 @@ static inline u64 radeon_bo_gpu_offset(struct radeon_bo *bo)
 
 	rdev = radeon_get_rdev(bo->tbo.bdev);
 
-	switch (bo->tbo.mem.mem_type) {
+	switch (bo->tbo.resource->mem_type) {
 	case TTM_PL_TT:
 		start = rdev->mc.gtt_start;
 		break;
@@ -104,7 +104,7 @@ static inline u64 radeon_bo_gpu_offset(struct radeon_bo *bo)
 		break;
 	}
 
-	return (bo->tbo.mem.start << PAGE_SHIFT) + start;
+	return (bo->tbo.resource->start << PAGE_SHIFT) + start;
 }
 
 static inline unsigned long radeon_bo_size(struct radeon_bo *bo)
@@ -119,7 +119,7 @@ static inline unsigned radeon_bo_ngpu_pages(struct radeon_bo *bo)
 
 static inline unsigned radeon_bo_gpu_page_alignment(struct radeon_bo *bo)
 {
-	return (bo->tbo.mem.page_alignment << PAGE_SHIFT) / RADEON_GPU_PAGE_SIZE;
+	return (bo->tbo.page_alignment << PAGE_SHIFT) / RADEON_GPU_PAGE_SIZE;
 }
 
 /**
@@ -160,9 +160,7 @@ extern void radeon_bo_get_tiling_flags(struct radeon_bo *bo,
 				u32 *tiling_flags, u32 *pitch);
 extern int radeon_bo_check_tiling(struct radeon_bo *bo, bool has_moved,
 				bool force_drop);
-extern void radeon_bo_move_notify(struct ttm_buffer_object *bo,
-				  bool evict,
-				  struct ttm_resource *new_mem);
+extern void radeon_bo_move_notify(struct ttm_buffer_object *bo);
 extern vm_fault_t radeon_bo_fault_reserve_notify(struct ttm_buffer_object *bo);
 extern int radeon_bo_get_surface_reg(struct radeon_bo *bo);
 extern void radeon_bo_fence(struct radeon_bo *bo, struct radeon_fence *fence,
@@ -171,15 +169,22 @@ extern void radeon_bo_fence(struct radeon_bo *bo, struct radeon_fence *fence,
 /*
  * sub allocation
  */
-
-static inline uint64_t radeon_sa_bo_gpu_addr(struct radeon_sa_bo *sa_bo)
+static inline struct radeon_sa_manager *
+to_radeon_sa_manager(struct drm_suballoc_manager *manager)
 {
-	return sa_bo->manager->gpu_addr + sa_bo->soffset;
+	return container_of(manager, struct radeon_sa_manager, base);
 }
 
-static inline void * radeon_sa_bo_cpu_addr(struct radeon_sa_bo *sa_bo)
+static inline uint64_t radeon_sa_bo_gpu_addr(struct drm_suballoc *sa_bo)
 {
-	return sa_bo->manager->cpu_ptr + sa_bo->soffset;
+	return to_radeon_sa_manager(sa_bo->manager)->gpu_addr +
+		drm_suballoc_soffset(sa_bo);
+}
+
+static inline void *radeon_sa_bo_cpu_addr(struct drm_suballoc *sa_bo)
+{
+	return to_radeon_sa_manager(sa_bo->manager)->cpu_ptr +
+		drm_suballoc_soffset(sa_bo);
 }
 
 extern int radeon_sa_bo_manager_init(struct radeon_device *rdev,
@@ -192,12 +197,10 @@ extern int radeon_sa_bo_manager_start(struct radeon_device *rdev,
 				      struct radeon_sa_manager *sa_manager);
 extern int radeon_sa_bo_manager_suspend(struct radeon_device *rdev,
 					struct radeon_sa_manager *sa_manager);
-extern int radeon_sa_bo_new(struct radeon_device *rdev,
-			    struct radeon_sa_manager *sa_manager,
-			    struct radeon_sa_bo **sa_bo,
-			    unsigned size, unsigned align);
-extern void radeon_sa_bo_free(struct radeon_device *rdev,
-			      struct radeon_sa_bo **sa_bo,
+extern int radeon_sa_bo_new(struct radeon_sa_manager *sa_manager,
+			    struct drm_suballoc **sa_bo,
+			    unsigned int size, unsigned int align);
+extern void radeon_sa_bo_free(struct drm_suballoc **sa_bo,
 			      struct radeon_fence *fence);
 #if defined(CONFIG_DEBUG_FS)
 extern void radeon_sa_bo_dump_debug_info(struct radeon_sa_manager *sa_manager,

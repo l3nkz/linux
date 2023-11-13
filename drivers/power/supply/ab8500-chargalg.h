@@ -15,7 +15,7 @@
  * - POWER_SUPPLY_TYPE_USB,
  * because only them store as drv_data pointer to struct ux500_charger.
  */
-#define psy_to_ux500_charger(x) power_supply_get_drvdata(psy)
+#define psy_to_ux500_charger(x) power_supply_get_drvdata(x)
 
 /* Forward declaration */
 struct ux500_charger;
@@ -31,21 +31,17 @@ struct ux500_charger_ops {
  * struct ux500_charger - power supply ux500 charger sub class
  * @psy			power supply base class
  * @ops			ux500 charger operations
- * @max_out_volt	maximum output charger voltage in mV
- * @max_out_curr	maximum output charger current in mA
+ * @max_out_volt_uv	maximum output charger voltage in uV
+ * @max_out_curr_ua	maximum output charger current in uA
  * @enabled		indicates if this charger is used or not
- * @external		external charger unit (pm2xxx)
  */
 struct ux500_charger {
 	struct power_supply *psy;
 	struct ux500_charger_ops ops;
-	int max_out_volt;
-	int max_out_curr;
+	int max_out_volt_uv;
+	int max_out_curr_ua;
 	int wdt_refresh;
 	bool enabled;
-	bool external;
 };
-
-extern struct blocking_notifier_head charger_notifier_list;
 
 #endif /* _AB8500_CHARGALG_H_ */

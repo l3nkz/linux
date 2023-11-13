@@ -27,7 +27,6 @@
 #include <asm/irq.h>
 #include <asm/page.h>
 #include <asm/io.h>
-#include <asm/prom.h>
 #include <asm/smp.h>
 #include <asm/paca.h>
 #include <asm/machdep.h>
@@ -56,7 +55,7 @@ static cpumask_var_t of_spin_mask;
 int smp_query_cpu_stopped(unsigned int pcpu)
 {
 	int cpu_status, status;
-	int qcss_tok = rtas_token("query-cpu-stopped-state");
+	int qcss_tok = rtas_function_token(RTAS_FN_QUERY_CPU_STOPPED_STATE);
 
 	if (qcss_tok == RTAS_UNKNOWN_SERVICE) {
 		printk_once(KERN_INFO
@@ -105,14 +104,11 @@ static inline int smp_startup_cpu(unsigned int lcpu)
 		return 1;
 	}
 
-	/* Fixup atomic count: it exited inside IRQ handler. */
-	task_thread_info(paca_ptrs[lcpu]->__current)->preempt_count	= 0;
-
 	/* 
 	 * If the RTAS start-cpu token does not exist then presume the
 	 * cpu is already spinning.
 	 */
-	start_cpu = rtas_token("start-cpu");
+	start_cpu = rtas_function_token(RTAS_FN_START_CPU);
 	if (start_cpu == RTAS_UNKNOWN_SERVICE)
 		return 1;
 
@@ -211,7 +207,9 @@ static __init void pSeries_smp_probe(void)
 	if (!cpu_has_feature(CPU_FTR_SMT))
 		return;
 
-	if (check_kvm_guest()) {
+	check_kvm_guest();
+
+	if (is_kvm_guest()) {
 		/*
 		 * KVM emulates doorbells by disabling FSCR[MSGP] so msgsndp
 		 * faults to the hypervisor which then reads the instruction
@@ -268,7 +266,7 @@ void __init smp_init_pseries(void)
 	 * We know prom_init will not have started them if RTAS supports
 	 * query-cpu-stopped-state.
 	 */
-	if (rtas_token("query-cpu-stopped-state") == RTAS_UNKNOWN_SERVICE) {
+	if (rtas_function_token(RTAS_FN_QUERY_CPU_STOPPED_STATE) == RTAS_UNKNOWN_SERVICE) {
 		if (cpu_has_feature(CPU_FTR_SMT)) {
 			for_each_present_cpu(i) {
 				if (cpu_thread_in_core(i) == 0)
@@ -278,12 +276,6 @@ void __init smp_init_pseries(void)
 			cpumask_copy(of_spin_mask, cpu_present_mask);
 
 		cpumask_clear_cpu(boot_cpuid, of_spin_mask);
-	}
-
-	/* Non-lpar has additional take/give timebase */
-	if (rtas_token("freeze-time-base") != RTAS_UNKNOWN_SERVICE) {
-		smp_ops->give_timebase = rtas_give_timebase;
-		smp_ops->take_timebase = rtas_take_timebase;
 	}
 
 	pr_debug(" <- smp_init_pSeries()\n");

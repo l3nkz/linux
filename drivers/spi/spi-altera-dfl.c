@@ -104,59 +104,51 @@ static const struct regmap_config indirect_regbus_cfg = {
 	.reg_read = indirect_bus_reg_read,
 };
 
-static struct spi_board_info m10_bmc_info = {
-	.modalias = "m10-d5005",
-	.max_speed_hz = 12500000,
-	.bus_num = 0,
-	.chip_select = 0,
-};
-
-static void config_spi_master(void __iomem *base, struct spi_master *master)
+static void config_spi_host(void __iomem *base, struct spi_controller *host)
 {
 	u64 v;
 
 	v = readq(base + SPI_CORE_PARAMETER);
 
-	master->mode_bits = SPI_CS_HIGH;
+	host->mode_bits = SPI_CS_HIGH;
 	if (FIELD_GET(CLK_POLARITY, v))
-		master->mode_bits |= SPI_CPOL;
+		host->mode_bits |= SPI_CPOL;
 	if (FIELD_GET(CLK_PHASE, v))
-		master->mode_bits |= SPI_CPHA;
+		host->mode_bits |= SPI_CPHA;
 
-	master->num_chipselect = FIELD_GET(NUM_CHIPSELECT, v);
-	master->bits_per_word_mask =
+	host->num_chipselect = FIELD_GET(NUM_CHIPSELECT, v);
+	host->bits_per_word_mask =
 		SPI_BPW_RANGE_MASK(1, FIELD_GET(DATA_WIDTH, v));
 }
 
 static int dfl_spi_altera_probe(struct dfl_device *dfl_dev)
 {
+	struct spi_board_info board_info = { 0 };
 	struct device *dev = &dfl_dev->dev;
-	struct spi_master *master;
+	struct spi_controller *host;
 	struct altera_spi *hw;
 	void __iomem *base;
-	int err = -ENODEV;
+	int err;
 
-	master = spi_alloc_master(dev, sizeof(struct altera_spi));
-	if (!master)
+	host = devm_spi_alloc_host(dev, sizeof(struct altera_spi));
+	if (!host)
 		return -ENOMEM;
 
-	master->bus_num = dfl_dev->id;
+	host->bus_num = -1;
 
-	hw = spi_master_get_devdata(master);
+	hw = spi_controller_get_devdata(host);
 
 	hw->dev = dev;
 
 	base = devm_ioremap_resource(dev, &dfl_dev->mmio_res);
 
-	if (IS_ERR(base)) {
-		dev_err(dev, "%s get mem resource fail!\n", __func__);
+	if (IS_ERR(base))
 		return PTR_ERR(base);
-	}
 
-	config_spi_master(base, master);
+	config_spi_host(base, host);
 	dev_dbg(dev, "%s cs %u bpm 0x%x mode 0x%x\n", __func__,
-		master->num_chipselect, master->bits_per_word_mask,
-		master->mode_bits);
+		host->num_chipselect, host->bits_per_word_mask,
+		host->mode_bits);
 
 	hw->regmap = devm_regmap_init(dev, NULL, base, &indirect_regbus_cfg);
 	if (IS_ERR(hw->regmap))
@@ -164,23 +156,28 @@ static int dfl_spi_altera_probe(struct dfl_device *dfl_dev)
 
 	hw->irq = -EINVAL;
 
-	altera_spi_init_master(master);
+	altera_spi_init_host(host);
 
-	err = devm_spi_register_master(dev, master);
-	if (err) {
-		dev_err(dev, "%s failed to register spi master %d\n", __func__, err);
-		goto exit;
-	}
+	err = devm_spi_register_controller(dev, host);
+	if (err)
+		return dev_err_probe(dev, err, "%s failed to register spi host\n",
+				     __func__);
 
-	if (!spi_new_device(master,  &m10_bmc_info)) {
+	if (dfl_dev->revision == FME_FEATURE_REV_MAX10_SPI_N5010)
+		strscpy(board_info.modalias, "m10-n5010", SPI_NAME_SIZE);
+	else
+		strscpy(board_info.modalias, "m10-d5005", SPI_NAME_SIZE);
+
+	board_info.max_speed_hz = 12500000;
+	board_info.bus_num = 0;
+	board_info.chip_select = 0;
+
+	if (!spi_new_device(host, &board_info)) {
 		dev_err(dev, "%s failed to create SPI device: %s\n",
-			__func__, m10_bmc_info.modalias);
+			__func__, board_info.modalias);
 	}
 
 	return 0;
-exit:
-	spi_master_put(master);
-	return err;
 }
 
 static const struct dfl_device_id dfl_spi_altera_ids[] = {

@@ -11,8 +11,9 @@
 #include <linux/io.h>
 #include <linux/delay.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 
 #include <linux/iio/iio.h>
@@ -84,9 +85,10 @@ void *adi_axi_adc_conv_priv(struct adi_axi_adc_conv *conv)
 {
 	struct adi_axi_adc_client *cl = conv_to_client(conv);
 
-	return (char *)cl + ALIGN(sizeof(struct adi_axi_adc_client), IIO_ALIGN);
+	return (char *)cl + ALIGN(sizeof(struct adi_axi_adc_client),
+				  IIO_DMA_MINALIGN);
 }
-EXPORT_SYMBOL_GPL(adi_axi_adc_conv_priv);
+EXPORT_SYMBOL_NS_GPL(adi_axi_adc_conv_priv, IIO_ADI_AXI);
 
 static void adi_axi_adc_write(struct adi_axi_adc_state *st,
 			      unsigned int reg,
@@ -169,9 +171,9 @@ static struct adi_axi_adc_conv *adi_axi_adc_conv_register(struct device *dev,
 	struct adi_axi_adc_client *cl;
 	size_t alloc_size;
 
-	alloc_size = ALIGN(sizeof(struct adi_axi_adc_client), IIO_ALIGN);
+	alloc_size = ALIGN(sizeof(struct adi_axi_adc_client), IIO_DMA_MINALIGN);
 	if (sizeof_priv)
-		alloc_size += ALIGN(sizeof_priv, IIO_ALIGN);
+		alloc_size += ALIGN(sizeof_priv, IIO_DMA_MINALIGN);
 
 	cl = kzalloc(alloc_size, GFP_KERNEL);
 	if (!cl)
@@ -202,33 +204,29 @@ static void adi_axi_adc_conv_unregister(struct adi_axi_adc_conv *conv)
 	kfree(cl);
 }
 
-static void devm_adi_axi_adc_conv_release(struct device *dev, void *res)
+static void devm_adi_axi_adc_conv_release(void *conv)
 {
-	adi_axi_adc_conv_unregister(*(struct adi_axi_adc_conv **)res);
+	adi_axi_adc_conv_unregister(conv);
 }
 
 struct adi_axi_adc_conv *devm_adi_axi_adc_conv_register(struct device *dev,
 							size_t sizeof_priv)
 {
-	struct adi_axi_adc_conv **ptr, *conv;
-
-	ptr = devres_alloc(devm_adi_axi_adc_conv_release, sizeof(*ptr),
-			   GFP_KERNEL);
-	if (!ptr)
-		return ERR_PTR(-ENOMEM);
+	struct adi_axi_adc_conv *conv;
+	int ret;
 
 	conv = adi_axi_adc_conv_register(dev, sizeof_priv);
-	if (IS_ERR(conv)) {
-		devres_free(ptr);
-		return ERR_CAST(conv);
-	}
+	if (IS_ERR(conv))
+		return conv;
 
-	*ptr = conv;
-	devres_add(dev, ptr);
+	ret = devm_add_action_or_reset(dev, devm_adi_axi_adc_conv_release,
+				       conv);
+	if (ret)
+		return ERR_PTR(ret);
 
 	return conv;
 }
-EXPORT_SYMBOL_GPL(devm_adi_axi_adc_conv_register);
+EXPORT_SYMBOL_NS_GPL(devm_adi_axi_adc_conv_register, IIO_ADI_AXI);
 
 static ssize_t in_voltage_scale_available_show(struct device *dev,
 					       struct device_attribute *attr,
@@ -326,16 +324,19 @@ static struct adi_axi_adc_client *adi_axi_adc_attach_client(struct device *dev)
 
 		if (!try_module_get(cl->dev->driver->owner)) {
 			mutex_unlock(&registered_clients_lock);
+			of_node_put(cln);
 			return ERR_PTR(-ENODEV);
 		}
 
 		get_device(cl->dev);
 		cl->info = info;
 		mutex_unlock(&registered_clients_lock);
+		of_node_put(cln);
 		return cl;
 	}
 
 	mutex_unlock(&registered_clients_lock);
+	of_node_put(cln);
 
 	return ERR_PTR(-EPROBE_DEFER);
 }

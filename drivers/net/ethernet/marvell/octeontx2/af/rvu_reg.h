@@ -1,11 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*  Marvell OcteonTx2 RVU Admin Function driver
+/* Marvell RVU Admin Function driver
  *
- * Copyright (C) 2018 Marvell International Ltd.
+ * Copyright (C) 2018 Marvell.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef RVU_REG_H
@@ -49,6 +46,11 @@
 #define RVU_AF_PFX_VF_BAR4_ADDR             (0x5400 | (a) << 4)
 #define RVU_AF_PFX_VF_BAR4_CFG              (0x5600 | (a) << 4)
 #define RVU_AF_PFX_LMTLINE_ADDR             (0x5800 | (a) << 4)
+#define RVU_AF_SMMU_ADDR_REQ		    (0x6000)
+#define RVU_AF_SMMU_TXN_REQ		    (0x6008)
+#define RVU_AF_SMMU_ADDR_RSP_STS	    (0x6010)
+#define RVU_AF_SMMU_ADDR_TLN		    (0x6018)
+#define RVU_AF_SMMU_TLN_FLIT0		    (0x6020)
 
 /* Admin function's privileged PF/VF registers */
 #define RVU_PRIV_CONST                      (0x8000000)
@@ -151,6 +153,7 @@
 #define NPA_AF_AQ_DONE_INT_W1S          (0x0688)
 #define NPA_AF_AQ_DONE_ENA_W1S          (0x0690)
 #define NPA_AF_AQ_DONE_ENA_W1C          (0x0698)
+#define NPA_AF_BATCH_CTL		(0x06a0)
 #define NPA_AF_LFX_AURAS_CFG(a)         (0x4000 | (a) << 18)
 #define NPA_AF_LFX_LOC_AURAS_BASE(a)    (0x4010 | (a) << 18)
 #define NPA_AF_LFX_QINTS_CFG(a)         (0x4100 | (a) << 18)
@@ -171,6 +174,7 @@
 #define NIX_AF_SQ_CONST			(0x0040)
 #define NIX_AF_CQ_CONST			(0x0048)
 #define NIX_AF_RQ_CONST			(0x0050)
+#define NIX_AF_PL_CONST			(0x0058)
 #define NIX_AF_PSE_CONST		(0x0060)
 #define NIX_AF_TL1_CONST		(0x0070)
 #define NIX_AF_TL2_CONST		(0x0078)
@@ -181,9 +185,11 @@
 #define NIX_AF_LSO_CFG			(0x00A8)
 #define NIX_AF_BLK_RST			(0x00B0)
 #define NIX_AF_TX_TSTMP_CFG		(0x00C0)
+#define NIX_AF_PL_TS			(0x00C8)
 #define NIX_AF_RX_CFG			(0x00D0)
 #define NIX_AF_AVG_DELAY		(0x00E0)
 #define NIX_AF_CINT_DELAY		(0x00F0)
+#define NIX_AF_VWQE_TIMER		(0x00F8)
 #define NIX_AF_RX_MCAST_BASE		(0x0100)
 #define NIX_AF_RX_MCAST_CFG		(0x0110)
 #define NIX_AF_RX_MCAST_BUF_BASE	(0x0120)
@@ -208,21 +214,31 @@
 #define NIX_AF_RVU_INT_ENA_W1S		(0x01D0)
 #define NIX_AF_RVU_INT_ENA_W1C		(0x01D8)
 #define NIX_AF_TCP_TIMER		(0x01E0)
-#define NIX_AF_RX_WQE_TAG_CTL		(0x01F0)
+#define NIX_AF_RX_DEF_ET(a)		(0x01F0ull | (uint64_t)(a) << 3)
 #define NIX_AF_RX_DEF_OL2		(0x0200)
 #define NIX_AF_RX_DEF_OIP4		(0x0210)
 #define NIX_AF_RX_DEF_IIP4		(0x0220)
+#define NIX_AF_RX_DEF_VLAN0_PCP_DEI	(0x0228)
 #define NIX_AF_RX_DEF_OIP6		(0x0230)
+#define NIX_AF_RX_DEF_VLAN1_PCP_DEI	(0x0238)
 #define NIX_AF_RX_DEF_IIP6		(0x0240)
 #define NIX_AF_RX_DEF_OTCP		(0x0250)
 #define NIX_AF_RX_DEF_ITCP		(0x0260)
 #define NIX_AF_RX_DEF_OUDP		(0x0270)
 #define NIX_AF_RX_DEF_IUDP		(0x0280)
 #define NIX_AF_RX_DEF_OSCTP		(0x0290)
+#define NIX_AF_RX_DEF_CST_APAD0		(0x0298)
 #define NIX_AF_RX_DEF_ISCTP		(0x02A0)
 #define NIX_AF_RX_DEF_IPSECX		(0x02B0)
+#define NIX_AF_RX_DEF_CST_APAD1		(0x02A8)
+#define NIX_AF_RX_DEF_IIP4_DSCP		(0x02E0)
+#define NIX_AF_RX_DEF_OIP4_DSCP		(0x02E8)
+#define NIX_AF_RX_DEF_IIP6_DSCP		(0x02F0)
+#define NIX_AF_RX_DEF_OIP6_DSCP		(0x02F8)
 #define NIX_AF_RX_IPSEC_GEN_CFG		(0x0300)
 #define NIX_AF_RX_CPTX_INST_ADDR	(0x0310)
+#define NIX_AF_RX_CPTX_INST_QSEL(a)	(0x0320ull | (uint64_t)(a) << 3)
+#define NIX_AF_RX_CPTX_CREDIT(a)	(0x0360ull | (uint64_t)(a) << 3)
 #define NIX_AF_NDC_TX_SYNC		(0x03F0)
 #define NIX_AF_AQ_CFG			(0x0400)
 #define NIX_AF_AQ_BASE			(0x0410)
@@ -250,10 +266,15 @@
 #define NIX_AF_SDP_TX_FIFO_STATUS	(0x0640)
 #define NIX_AF_TX_NPC_CAPTURE_CONFIG	(0x0660)
 #define NIX_AF_TX_NPC_CAPTURE_INFO	(0x0670)
+#define NIX_AF_SEB_CFG			(0x05F0)
+#define NIX_PTP_1STEP_EN		BIT_ULL(2)
 
 #define NIX_AF_DEBUG_NPC_RESP_DATAX(a)          (0x680 | (a) << 3)
 #define NIX_AF_SMQX_CFG(a)                      (0x700 | (a) << 16)
 #define NIX_AF_SQM_DBG_CTL_STATUS               (0x750)
+#define NIX_AF_DWRR_SDP_MTU                     (0x790) /* All CN10K except CN10KB */
+#define NIX_AF_DWRR_MTUX(a)			(0x790 | (a) << 16) /* Only for CN10KB */
+#define NIX_AF_DWRR_RPM_MTU                     (0x7A0)
 #define NIX_AF_PSE_CHANNEL_LEVEL                (0x800)
 #define NIX_AF_PSE_SHAPER_CFG                   (0x810)
 #define NIX_AF_TX_EXPR_CREDIT			(0x830)
@@ -407,6 +428,7 @@
 #define NIX_AF_RX_NPC_MIRROR_DROP	(0x4730)
 #define NIX_AF_RX_ACTIVE_CYCLES_PCX(a)	(0x4800 | (a) << 16)
 #define NIX_AF_LINKX_CFG(a)		(0x4010 | (a) << 17)
+#define NIX_AF_MDQX_IN_MD_COUNT(a)	(0x14e0 | (a) << 16)
 
 #define NIX_PRIV_AF_INT_CFG		(0x8000000)
 #define NIX_PRIV_LFX_CFG		(0x8000010)
@@ -509,6 +531,7 @@
 #define CPT_AF_CTX_WBACK_LATENCY_PC     (0x49448ull)
 #define CPT_AF_CTX_PSH_PC               (0x49450ull)
 #define CPT_AF_CTX_PSH_LATENCY_PC       (0x49458ull)
+#define CPT_AF_CTX_CAM_DATA(a)          (0x49800ull | (u64)(a) << 3)
 #define CPT_AF_RXC_TIME                 (0x50010ull)
 #define CPT_AF_RXC_TIME_CFG             (0x50018ull)
 #define CPT_AF_RXC_DFRG                 (0x50020ull)
@@ -525,7 +548,10 @@
 
 #define CPT_LF_CTL                      0x10
 #define CPT_LF_INPROG                   0x40
+#define CPT_LF_Q_SIZE                   0x100
+#define CPT_LF_Q_INST_PTR               0x110
 #define CPT_LF_Q_GRP_PTR                0x120
+#define CPT_LF_CTX_FLUSH                0x510
 
 #define NPC_AF_BLK_RST                  (0x00040)
 
@@ -545,7 +571,13 @@
 #define NPC_AF_PCK_DEF_OIP4		(0x00620)
 #define NPC_AF_PCK_DEF_OIP6		(0x00630)
 #define NPC_AF_PCK_DEF_IIP4		(0x00640)
+#define NPC_AF_INTFX_HASHX_RESULT_CTRL(a, b)	(0x006c0 | (a) << 4 | (b) << 3)
+#define NPC_AF_INTFX_HASHX_MASKX(a, b, c)  (0x00700 | (a) << 5 | (b) << 4 | (c) << 3)
 #define NPC_AF_KEX_LDATAX_FLAGS_CFG(a)	(0x00800 | (a) << 3)
+#define NPC_AF_INTFX_HASHX_CFG(a, b)  (0x00b00 | (a) << 6 | (b) << 4)
+#define NPC_AF_INTFX_SECRET_KEY0(a)	(0x00e00 | (a) << 3)
+#define NPC_AF_INTFX_SECRET_KEY1(a)	(0x00e20 | (a) << 3)
+#define NPC_AF_INTFX_SECRET_KEY2(a)	(0x00e40 | (a) << 3)
 #define NPC_AF_INTFX_KEX_CFG(a)		(0x01010 | (a) << 8)
 #define NPC_AF_PKINDX_ACTION0(a)	(0x80000ull | (a) << 6)
 #define NPC_AF_PKINDX_ACTION1(a)	(0x80008ull | (a) << 6)
@@ -578,6 +610,15 @@
 #define NPC_AF_MCAM_DBG			(0x3001000)
 #define NPC_AF_DBG_DATAX(a)		(0x3001400 | (a) << 4)
 #define NPC_AF_DBG_RESULTX(a)		(0x3001800 | (a) << 4)
+
+#define NPC_AF_EXACT_MEM_ENTRY(a, b)	(0x300000 | (a) << 15 | (b) << 3)
+#define NPC_AF_EXACT_CAM_ENTRY(a)	(0xC00 | (a) << 3)
+#define NPC_AF_INTFX_EXACT_MASK(a)	(0x660 | (a) << 3)
+#define NPC_AF_INTFX_EXACT_RESULT_CTL(a)(0x680 | (a) << 3)
+#define NPC_AF_INTFX_EXACT_CFG(a)	(0xA00 | (a) << 3)
+#define NPC_AF_INTFX_EXACT_SECRET0(a)	(0xE00 | (a) << 3)
+#define NPC_AF_INTFX_EXACT_SECRET1(a)	(0xE20 | (a) << 3)
+#define NPC_AF_INTFX_EXACT_SECRET2(a)	(0xE40 | (a) << 3)
 
 #define NPC_AF_MCAMEX_BANKX_CAMX_INTF(a, b, c) ({			   \
 	u64 offset;							   \
@@ -654,6 +695,7 @@
 #define NDC_AF_INTR_ENA_W1S		(0x00068)
 #define NDC_AF_INTR_ENA_W1C		(0x00070)
 #define NDC_AF_ACTIVE_PC		(0x00078)
+#define NDC_AF_CAMS_RD_INTERVAL		(0x00080)
 #define NDC_AF_BP_TEST_ENABLE		(0x001F8)
 #define NDC_AF_BP_TEST(a)		(0x00200 | (a) << 3)
 #define NDC_AF_BLK_RST			(0x002F0)
@@ -669,6 +711,8 @@
 		(0x00F00 | (a) << 5 | (b) << 4)
 #define NDC_AF_BANKX_HIT_PC(a)		(0x01000 | (a) << 3)
 #define NDC_AF_BANKX_MISS_PC(a)		(0x01100 | (a) << 3)
+#define NDC_AF_BANKX_LINEX_METADATA(a, b) \
+		(0x10000 | (a) << 12 | (b) << 3)
 
 /* LBK */
 #define LBK_CONST			(0x10ull)
@@ -681,5 +725,13 @@
 #define LBK_LINK_CFG_RANGE_MASK		GENMASK_ULL(19, 16)
 #define LBK_LINK_CFG_ID_MASK		GENMASK_ULL(11, 6)
 #define LBK_LINK_CFG_BASE_MASK		GENMASK_ULL(5, 0)
+
+/* APR */
+#define	APR_AF_LMT_CFG			(0x000ull)
+#define	APR_AF_LMT_MAP_BASE		(0x008ull)
+#define	APR_AF_LMT_CTL			(0x010ull)
+#define APR_LMT_MAP_ENT_DIS_SCH_CMP_SHIFT	23
+#define APR_LMT_MAP_ENT_SCH_ENA_SHIFT		22
+#define APR_LMT_MAP_ENT_DIS_LINE_PREF_SHIFT	21
 
 #endif /* RVU_REG_H */

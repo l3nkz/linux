@@ -332,8 +332,8 @@ static int cobalt_setup_pci(struct cobalt *cobalt, struct pci_dev *pci_dev,
 		}
 	}
 
-	if (pci_set_dma_mask(pci_dev, DMA_BIT_MASK(64))) {
-		ret = pci_set_dma_mask(pci_dev, DMA_BIT_MASK(32));
+	if (dma_set_mask(&pci_dev->dev, DMA_BIT_MASK(64))) {
+		ret = dma_set_mask(&pci_dev->dev, DMA_BIT_MASK(32));
 		if (ret) {
 			cobalt_err("no suitable DMA available\n");
 			goto err_disable;
@@ -667,6 +667,7 @@ static int cobalt_probe(struct pci_dev *pci_dev,
 		return -ENOMEM;
 	cobalt->pci_dev = pci_dev;
 	cobalt->instance = i;
+	mutex_init(&cobalt->pci_lock);
 
 	retval = v4l2_device_register(&pci_dev->dev, &cobalt->v4l2_dev);
 	if (retval) {

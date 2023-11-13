@@ -7,6 +7,7 @@
 #include <linux/ip.h>
 #include <linux/netfilter.h>
 #include <linux/module.h>
+#include <linux/rcupdate.h>
 #include <linux/skbuff.h>
 #include <net/netns/generic.h>
 #include <net/route.h>
@@ -20,12 +21,7 @@
 #endif
 #include <net/netfilter/nf_conntrack_zones.h>
 
-static unsigned int defrag4_pernet_id __read_mostly;
 static DEFINE_MUTEX(defrag4_mutex);
-
-struct defrag4_pernet {
-	unsigned int users;
-};
 
 static int nf_ct_ipv4_gather_frags(struct net *net, struct sk_buff *skb,
 				   u_int32_t user)
@@ -70,7 +66,7 @@ static unsigned int ipv4_conntrack_defrag(void *priv,
 	struct sock *sk = skb->sk;
 
 	if (sk && sk_fullsock(sk) && (sk->sk_family == PF_INET) &&
-	    inet_sk(sk)->nodefrag)
+	    inet_test_bit(NODEFRAG, sk))
 		return NF_ACCEPT;
 
 #if IS_ENABLED(CONFIG_NF_CONNTRACK)
@@ -111,51 +107,60 @@ static const struct nf_hook_ops ipv4_defrag_ops[] = {
 
 static void __net_exit defrag4_net_exit(struct net *net)
 {
-	struct defrag4_pernet *nf_defrag = net_generic(net, defrag4_pernet_id);
-
-	if (nf_defrag->users) {
+	if (net->nf.defrag_ipv4_users) {
 		nf_unregister_net_hooks(net, ipv4_defrag_ops,
 					ARRAY_SIZE(ipv4_defrag_ops));
-		nf_defrag->users = 0;
+		net->nf.defrag_ipv4_users = 0;
 	}
 }
 
+static const struct nf_defrag_hook defrag_hook = {
+	.owner = THIS_MODULE,
+	.enable = nf_defrag_ipv4_enable,
+	.disable = nf_defrag_ipv4_disable,
+};
+
 static struct pernet_operations defrag4_net_ops = {
 	.exit = defrag4_net_exit,
-	.id   = &defrag4_pernet_id,
-	.size = sizeof(struct defrag4_pernet),
 };
 
 static int __init nf_defrag_init(void)
 {
-	return register_pernet_subsys(&defrag4_net_ops);
+	int err;
+
+	err = register_pernet_subsys(&defrag4_net_ops);
+	if (err)
+		return err;
+
+	rcu_assign_pointer(nf_defrag_v4_hook, &defrag_hook);
+	return err;
 }
 
 static void __exit nf_defrag_fini(void)
 {
+	rcu_assign_pointer(nf_defrag_v4_hook, NULL);
 	unregister_pernet_subsys(&defrag4_net_ops);
 }
 
 int nf_defrag_ipv4_enable(struct net *net)
 {
-	struct defrag4_pernet *nf_defrag = net_generic(net, defrag4_pernet_id);
 	int err = 0;
 
 	mutex_lock(&defrag4_mutex);
-	if (nf_defrag->users == UINT_MAX) {
+	if (net->nf.defrag_ipv4_users == UINT_MAX) {
 		err = -EOVERFLOW;
 		goto out_unlock;
 	}
 
-	if (nf_defrag->users) {
-		nf_defrag->users++;
+	if (net->nf.defrag_ipv4_users) {
+		net->nf.defrag_ipv4_users++;
 		goto out_unlock;
 	}
 
 	err = nf_register_net_hooks(net, ipv4_defrag_ops,
 				    ARRAY_SIZE(ipv4_defrag_ops));
 	if (err == 0)
-		nf_defrag->users = 1;
+		net->nf.defrag_ipv4_users = 1;
 
  out_unlock:
 	mutex_unlock(&defrag4_mutex);
@@ -165,12 +170,10 @@ EXPORT_SYMBOL_GPL(nf_defrag_ipv4_enable);
 
 void nf_defrag_ipv4_disable(struct net *net)
 {
-	struct defrag4_pernet *nf_defrag = net_generic(net, defrag4_pernet_id);
-
 	mutex_lock(&defrag4_mutex);
-	if (nf_defrag->users) {
-		nf_defrag->users--;
-		if (nf_defrag->users == 0)
+	if (net->nf.defrag_ipv4_users) {
+		net->nf.defrag_ipv4_users--;
+		if (net->nf.defrag_ipv4_users == 0)
 			nf_unregister_net_hooks(net, ipv4_defrag_ops,
 						ARRAY_SIZE(ipv4_defrag_ops));
 	}

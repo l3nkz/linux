@@ -383,8 +383,8 @@ struct cdnsp_intr_reg {
 #define IMAN_IE			BIT(1)
 #define IMAN_IP			BIT(0)
 /* bits 2:31 need to be preserved */
-#define IMAN_IE_SET(p)		(((p) & IMAN_IE) | 0x2)
-#define IMAN_IE_CLEAR(p)	(((p) & IMAN_IE) & ~(0x2))
+#define IMAN_IE_SET(p)		((p) | IMAN_IE)
+#define IMAN_IE_CLEAR(p)	((p) & ~IMAN_IE)
 
 /* IMOD - Interrupter Moderation Register - irq_control bitmasks. */
 /*
@@ -1532,8 +1532,8 @@ void cdnsp_queue_stop_endpoint(struct cdnsp_device *pdev,
 			       unsigned int ep_index);
 int cdnsp_queue_ctrl_tx(struct cdnsp_device *pdev, struct cdnsp_request *preq);
 int cdnsp_queue_bulk_tx(struct cdnsp_device *pdev, struct cdnsp_request *preq);
-int cdnsp_queue_isoc_tx_prepare(struct cdnsp_device *pdev,
-				struct cdnsp_request *preq);
+int cdnsp_queue_isoc_tx(struct cdnsp_device *pdev,
+			struct cdnsp_request *preq);
 void cdnsp_queue_configure_endpoint(struct cdnsp_device *pdev,
 				    dma_addr_t in_ctx_ptr);
 void cdnsp_queue_reset_ep(struct cdnsp_device *pdev, unsigned int ep_index);

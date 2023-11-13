@@ -15,8 +15,7 @@
 #include <linux/iio/trigger.h>
 #include <linux/iio/imu/adis.h>
 
-static int adis_data_rdy_trigger_set_state(struct iio_trigger *trig,
-						bool state)
+static int adis_data_rdy_trigger_set_state(struct iio_trigger *trig, bool state)
 {
 	struct adis *adis = iio_trigger_get_drvdata(trig);
 
@@ -30,6 +29,10 @@ static const struct iio_trigger_ops adis_trigger_ops = {
 static int adis_validate_irq_flag(struct adis *adis)
 {
 	unsigned long direction = adis->irq_flag & IRQF_TRIGGER_MASK;
+
+	/* We cannot mask the interrupt so ensure it's not enabled at request */
+	if (adis->data->unmasked_drdy)
+		adis->irq_flag |= IRQF_NO_AUTOEN;
 	/*
 	 * Typically this devices have data ready either on the rising edge or
 	 * on the falling edge of the data ready pin. This checks enforces that
@@ -62,7 +65,8 @@ int devm_adis_probe_trigger(struct adis *adis, struct iio_dev *indio_dev)
 	int ret;
 
 	adis->trig = devm_iio_trigger_alloc(&adis->spi->dev, "%s-dev%d",
-					    indio_dev->name, indio_dev->id);
+					    indio_dev->name,
+					    iio_device_id(indio_dev));
 	if (!adis->trig)
 		return -ENOMEM;
 
@@ -83,5 +87,5 @@ int devm_adis_probe_trigger(struct adis *adis, struct iio_dev *indio_dev)
 
 	return devm_iio_trigger_register(&adis->spi->dev, adis->trig);
 }
-EXPORT_SYMBOL_GPL(devm_adis_probe_trigger);
+EXPORT_SYMBOL_NS_GPL(devm_adis_probe_trigger, IIO_ADISLIB);
 

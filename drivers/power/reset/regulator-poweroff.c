@@ -64,6 +64,7 @@ static const struct of_device_id of_regulator_poweroff_match[] = {
 	{ .compatible = "regulator-poweroff", },
 	{},
 };
+MODULE_DEVICE_TABLE(of, of_regulator_poweroff_match);
 
 static struct platform_driver regulator_poweroff_driver = {
 	.probe = regulator_poweroff_probe,
@@ -78,5 +79,4 @@ module_platform_driver(regulator_poweroff_driver);
 
 MODULE_AUTHOR("Michael Klein <michael@fossekall.de>");
 MODULE_DESCRIPTION("Regulator poweroff driver");
-MODULE_LICENSE("GPL v2");
 MODULE_ALIAS("platform:poweroff-regulator");

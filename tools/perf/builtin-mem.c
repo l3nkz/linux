@@ -4,7 +4,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "builtin.h"
-#include "perf.h"
 
 #include <subcmd/parse-options.h>
 #include "util/auxtrace.h"
@@ -18,6 +17,10 @@
 #include "util/dso.h"
 #include "util/map.h"
 #include "util/symbol.h"
+#include "util/pmus.h"
+#include "util/sample.h"
+#include "util/string2.h"
+#include "util/util.h"
 #include <linux/err.h>
 
 #define MEM_OPERATION_LOAD	0x1
@@ -62,8 +65,10 @@ static const char * const *record_mem_usage = __usage;
 
 static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 {
-	int rec_argc, i = 0, j;
+	int rec_argc, i = 0, j, tmp_nr = 0;
+	int start, end;
 	const char **rec_argv;
+	char **rec_tmp;
 	int ret;
 	bool all_user = false, all_kernel = false;
 	struct perf_mem_event *e;
@@ -87,10 +92,24 @@ static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 	argc = parse_options(argc, argv, options, record_mem_usage,
 			     PARSE_OPT_KEEP_UNKNOWN);
 
-	rec_argc = argc + 9; /* max number of arguments */
+	/* Max number of arguments multiplied by number of PMUs that can support them. */
+	rec_argc = argc + 9 * perf_pmus__num_mem_pmus();
+
+	if (mem->cpu_list)
+		rec_argc += 2;
+
 	rec_argv = calloc(rec_argc + 1, sizeof(char *));
 	if (!rec_argv)
 		return -1;
+
+	/*
+	 * Save the allocated event name strings.
+	 */
+	rec_tmp = calloc(rec_argc + 1, sizeof(char *));
+	if (!rec_tmp) {
+		free(rec_argv);
+		return -1;
+	}
 
 	rec_argv[i++] = "record";
 
@@ -104,6 +123,7 @@ static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 	    (mem->operation & MEM_OPERATION_LOAD) &&
 	    (mem->operation & MEM_OPERATION_STORE)) {
 		e->record = true;
+		rec_argv[i++] = "-W";
 	} else {
 		if (mem->operation & MEM_OPERATION_LOAD) {
 			e = perf_mem_events__ptr(PERF_MEM_EVENTS__LOAD);
@@ -128,21 +148,11 @@ static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 	if (mem->data_page_size)
 		rec_argv[i++] = "--data-page-size";
 
-	for (j = 0; j < PERF_MEM_EVENTS__MAX; j++) {
-		e = perf_mem_events__ptr(j);
-		if (!e->record)
-			continue;
-
-		if (!e->supported) {
-			pr_err("failed: event '%s' not supported\n",
-			       perf_mem_events__name(j));
-			free(rec_argv);
-			return -1;
-		}
-
-		rec_argv[i++] = "-e";
-		rec_argv[i++] = perf_mem_events__name(j);
-	}
+	start = i;
+	ret = perf_mem_events__record_args(rec_argv, &i, rec_tmp, &tmp_nr);
+	if (ret)
+		goto out;
+	end = i;
 
 	if (all_user)
 		rec_argv[i++] = "--all-user";
@@ -150,20 +160,29 @@ static int __cmd_record(int argc, const char **argv, struct perf_mem *mem)
 	if (all_kernel)
 		rec_argv[i++] = "--all-kernel";
 
+	if (mem->cpu_list) {
+		rec_argv[i++] = "-C";
+		rec_argv[i++] = mem->cpu_list;
+	}
+
 	for (j = 0; j < argc; j++, i++)
 		rec_argv[i] = argv[j];
 
 	if (verbose > 0) {
 		pr_debug("calling: record ");
 
-		while (rec_argv[j]) {
+		for (j = start; j < end; j++)
 			pr_debug("%s ", rec_argv[j]);
-			j++;
-		}
+
 		pr_debug("\n");
 	}
 
 	ret = cmd_record(i, rec_argv);
+out:
+	for (i = 0; i < tmp_nr; i++)
+		free(rec_tmp[i]);
+
+	free(rec_tmp);
 	free(rec_argv);
 	return ret;
 }
@@ -178,18 +197,24 @@ dump_raw_samples(struct perf_tool *tool,
 	struct addr_location al;
 	const char *fmt, *field_sep;
 	char str[PAGE_SIZE_NAME_LEN];
+	struct dso *dso = NULL;
 
+	addr_location__init(&al);
 	if (machine__resolve(machine, &al, sample) < 0) {
 		fprintf(stderr, "problem processing %d event, skipping it.\n",
 				event->header.type);
+		addr_location__exit(&al);
 		return -1;
 	}
 
 	if (al.filtered || (mem->hide_unresolved && al.sym == NULL))
 		goto out_put;
 
-	if (al.map != NULL)
-		al.map->dso->hit = 1;
+	if (al.map != NULL) {
+		dso = map__dso(al.map);
+		if (dso)
+			dso->hit = 1;
+	}
 
 	field_sep = symbol_conf.field_sep;
 	if (field_sep) {
@@ -230,10 +255,10 @@ dump_raw_samples(struct perf_tool *tool,
 		symbol_conf.field_sep,
 		sample->data_src,
 		symbol_conf.field_sep,
-		al.map ? (al.map->dso ? al.map->dso->long_name : "???") : "???",
+		dso ? dso->long_name : "???",
 		al.sym ? al.sym->name : "???");
 out_put:
-	addr_location__put(&al);
+	addr_location__exit(&al);
 	return 0;
 }
 
@@ -260,8 +285,7 @@ static int report_raw_events(struct perf_mem *mem)
 		.force = mem->force,
 	};
 	int ret;
-	struct perf_session *session = perf_session__new(&data, false,
-							 &mem->tool);
+	struct perf_session *session = perf_session__new(&data, &mem->tool);
 
 	if (IS_ERR(session))
 		return PTR_ERR(session);
@@ -486,9 +510,9 @@ int cmd_mem(int argc, const char **argv)
 			mem.input_name = "perf.data";
 	}
 
-	if (!strncmp(argv[0], "rec", 3))
+	if (strlen(argv[0]) > 2 && strstarts("record", argv[0]))
 		return __cmd_record(argc, argv, &mem);
-	else if (!strncmp(argv[0], "rep", 3))
+	else if (strlen(argv[0]) > 2 && strstarts("report", argv[0]))
 		return report_events(argc, argv, &mem);
 	else
 		usage_with_options(mem_usage, mem_options);

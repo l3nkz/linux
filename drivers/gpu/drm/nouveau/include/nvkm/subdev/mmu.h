@@ -15,9 +15,9 @@ struct nvkm_vma {
 	u8   refd:3; /* Current page type (index, or NONE for unreferenced). */
 	bool used:1; /* Region allocated. */
 	bool part:1; /* Region was split from an allocated region by map(). */
-	bool user:1; /* Region user-allocated. */
 	bool busy:1; /* Region busy (for temporarily preventing user access). */
 	bool mapped:1; /* Region contains valid pages. */
+	bool no_comp:1; /* Force no memory compression. */
 	struct nvkm_memory *memory; /* Memory currently mapped into VMA. */
 	struct nvkm_tags *tags; /* Compression tag reference. */
 };
@@ -28,10 +28,26 @@ struct nvkm_vmm {
 	const char *name;
 	u32 debug;
 	struct kref kref;
-	struct mutex mutex;
+
+	struct {
+		struct mutex vmm;
+		struct mutex ref;
+		struct mutex map;
+	} mutex;
 
 	u64 start;
 	u64 limit;
+	struct {
+		struct {
+			u64 addr;
+			u64 size;
+		} p;
+		struct {
+			u64 addr;
+			u64 size;
+		} n;
+		bool raw;
+	} managed;
 
 	struct nvkm_vmm_pt *pd;
 	struct list_head join;
@@ -71,6 +87,7 @@ struct nvkm_vmm_map {
 
 	const struct nvkm_vmm_page *page;
 
+	bool no_comp;
 	struct nvkm_tags *tags;
 	u64 next;
 	u64 type;

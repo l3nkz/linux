@@ -13,7 +13,7 @@ maintainers:
 
 description: |
   The Infotainment board plugs into the Common Processor Board, the support of the
-  extension board is extending the CPB audio support, decribed in:
+  extension board is extending the CPB audio support, described in:
   sound/ti,j721e-cpb-audio.txt
 
   The audio support on the Infotainment Expansion Board consists of McASP0
@@ -118,8 +118,6 @@ examples:
     sound {
         compatible = "ti,j721e-cpb-ivi-audio";
         model = "j721e-cpb-ivi";
-
-        status = "okay";
 
         ti,cpb-mcasp = <&mcasp10>;
         ti,cpb-codec = <&pcm3168a_1>;

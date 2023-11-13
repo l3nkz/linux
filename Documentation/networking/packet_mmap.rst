@@ -153,7 +153,7 @@ As capture, each frame contains two parts::
     struct ifreq s_ifr;
     ...
 
-    strncpy (s_ifr.ifr_name, "eth0", sizeof(s_ifr.ifr_name));
+    strscpy_pad (s_ifr.ifr_name, "eth0", sizeof(s_ifr.ifr_name));
 
     /* get interface index of eth0 */
     ioctl(this->socket, SIOCGIFINDEX, &s_ifr);
@@ -755,7 +755,7 @@ AF_PACKET TPACKET_V3 example
 ============================
 
 AF_PACKET's TPACKET_V3 ring buffer can be configured to use non-static frame
-sizes by doing it's own memory management. It is based on blocks where polling
+sizes by doing its own memory management. It is based on blocks where polling
 works on a per block basis instead of per ring as in TPACKET_V2 and predecessor.
 
 It is said that TPACKET_V3 brings the following benefits:

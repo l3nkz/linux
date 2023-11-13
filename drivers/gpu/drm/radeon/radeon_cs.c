@@ -270,7 +270,8 @@ int radeon_cs_parser_init(struct radeon_cs_parser *p, void *data)
 {
 	struct drm_radeon_cs *cs = data;
 	uint64_t *chunk_array_ptr;
-	unsigned size, i;
+	u64 size;
+	unsigned i;
 	u32 ring = RADEON_CS_RING_GFX;
 	s32 priority = 0;
 
@@ -400,12 +401,15 @@ static int cmp_size_smaller_first(void *priv, const struct list_head *a,
 	struct radeon_bo_list *lb = list_entry(b, struct radeon_bo_list, tv.head);
 
 	/* Sort A before B if A is smaller. */
-	return (int)la->robj->tbo.mem.num_pages -
-		(int)lb->robj->tbo.mem.num_pages;
+	if (la->robj->tbo.base.size > lb->robj->tbo.base.size)
+		return 1;
+	if (la->robj->tbo.base.size < lb->robj->tbo.base.size)
+		return -1;
+	return 0;
 }
 
 /**
- * cs_parser_fini() - clean parser states
+ * radeon_cs_parser_fini() - clean parser states
  * @parser:	parser structure holding parsing context.
  * @error:	error number
  * @backoff:	indicator to backoff the reservation
@@ -516,7 +520,7 @@ static int radeon_bo_vm_update_pte(struct radeon_cs_parser *p,
 	}
 
 	r = radeon_vm_bo_update(rdev, vm->ib_bo_va,
-				&rdev->ring_tmp_bo.bo->tbo.mem);
+				rdev->ring_tmp_bo.bo->tbo.resource);
 	if (r)
 		return r;
 
@@ -530,11 +534,15 @@ static int radeon_bo_vm_update_pte(struct radeon_cs_parser *p,
 			return -EINVAL;
 		}
 
-		r = radeon_vm_bo_update(rdev, bo_va, &bo->tbo.mem);
+		r = radeon_vm_bo_update(rdev, bo_va, bo->tbo.resource);
 		if (r)
 			return r;
 
 		radeon_sync_fence(&p->ib.sync, bo_va->last_pt_update);
+
+		r = dma_resv_reserve_fences(bo->tbo.base.resv, 1);
+		if (r)
+			return r;
 	}
 
 	return radeon_vm_clear_invalids(rdev, vm);

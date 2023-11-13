@@ -10,7 +10,6 @@
 struct pci_dn;
 
 enum pnv_phb_type {
-	PNV_PHB_IODA1,
 	PNV_PHB_IODA2,
 	PNV_PHB_NPU_OCAPI,
 };
@@ -123,11 +122,7 @@ struct pnv_phb {
 #endif
 
 	unsigned int		msi_base;
-	unsigned int		msi32_support;
 	struct msi_bitmap	msi_bmp;
-	int (*msi_setup)(struct pnv_phb *phb, struct pci_dev *dev,
-			 unsigned int hwirq, unsigned int virq,
-			 unsigned int is_64, struct msi_msg *msg);
 	int (*init_m64)(struct pnv_phb *phb);
 	int (*get_pe_state)(struct pnv_phb *phb, int pe_no);
 	void (*freeze_pe)(struct pnv_phb *phb, int pe_no);
@@ -166,10 +161,6 @@ struct pnv_phb {
 		unsigned int		*m64_segmap;
 		unsigned int		*m32_segmap;
 		unsigned int		*io_segmap;
-
-		/* DMA32 segment maps - IODA1 only */
-		unsigned int		dma32_count;
-		unsigned int		*dma32_segmap;
 
 		/* IRQ chip */
 		int			irq_chip_init;
@@ -289,8 +280,6 @@ extern void pnv_pci_init_npu2_opencapi_phb(struct device_node *np);
 extern void pnv_pci_reset_secondary_bus(struct pci_dev *dev);
 extern int pnv_eeh_phb_reset(struct pci_controller *hose, int option);
 
-extern int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type);
-extern void pnv_teardown_msi_irqs(struct pci_dev *pdev);
 extern struct pnv_ioda_pe *pnv_pci_bdfn_to_pe(struct pnv_phb *phb, u16 bdfn);
 extern struct pnv_ioda_pe *pnv_ioda_get_pe(struct pci_dev *dev);
 extern void pnv_set_msi_irq_chip(struct pnv_phb *phb, unsigned int virq);
@@ -317,8 +306,7 @@ extern int pnv_tce_build(struct iommu_table *tbl, long index, long npages,
 		unsigned long attrs);
 extern void pnv_tce_free(struct iommu_table *tbl, long index, long npages);
 extern int pnv_tce_xchg(struct iommu_table *tbl, long index,
-		unsigned long *hpa, enum dma_data_direction *direction,
-		bool alloc);
+		unsigned long *hpa, enum dma_data_direction *direction);
 extern __be64 *pnv_tce_useraddrptr(struct iommu_table *tbl, long index,
 		bool alloc);
 extern unsigned long pnv_tce_get(struct iommu_table *tbl, long index);

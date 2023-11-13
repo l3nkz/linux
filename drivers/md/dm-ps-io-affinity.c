@@ -91,7 +91,6 @@ static int ioa_add_path(struct path_selector *ps, struct dm_path *path,
 		cpumask_set_cpu(cpu, s->path_mask);
 		s->path_map[cpu] = pi;
 		refcount_inc(&pi->refcount);
-		continue;
 	}
 
 	if (refcount_dec_and_test(&pi->refcount)) {
@@ -109,7 +108,7 @@ free_pi:
 	return ret;
 }
 
-static int ioa_create(struct path_selector *ps, unsigned argc, char **argv)
+static int ioa_create(struct path_selector *ps, unsigned int argc, char **argv)
 {
 	struct selector *s;
 
@@ -139,7 +138,7 @@ free_selector:
 static void ioa_destroy(struct path_selector *ps)
 {
 	struct selector *s = ps->context;
-	unsigned cpu;
+	unsigned int cpu;
 
 	for_each_cpu(cpu, s->path_mask)
 		ioa_free_path(s, cpu);
@@ -163,13 +162,16 @@ static int ioa_status(struct path_selector *ps, struct dm_path *path,
 		return sz;
 	}
 
-	switch(type) {
+	switch (type) {
 	case STATUSTYPE_INFO:
 		DMEMIT("%d ", atomic_read(&s->map_misses));
 		break;
 	case STATUSTYPE_TABLE:
 		pi = path->pscontext;
 		DMEMIT("%*pb ", cpumask_pr_args(pi->cpumask));
+		break;
+	case STATUSTYPE_IMA:
+		*result = '\0';
 		break;
 	}
 

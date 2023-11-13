@@ -6,6 +6,7 @@
  * Author: Alessandro Zummo <a.zummo@towertech.it>
  */
 
+#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/rtc.h>
 
@@ -102,7 +103,7 @@ max_user_freq_store(struct device *dev, struct device_attribute *attr,
 static DEVICE_ATTR_RW(max_user_freq);
 
 /**
- * rtc_sysfs_show_hctosys - indicate if the given RTC set the system time
+ * hctosys_show - indicate if the given RTC set the system time
  * @dev: The device that the attribute belongs to.
  * @attr: The attribute being read.
  * @buf: The result buffer.

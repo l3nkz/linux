@@ -118,8 +118,8 @@ static void pwm_imx27_clk_disable_unprepare(struct pwm_imx27_chip *imx)
 	clk_disable_unprepare(imx->clk_ipg);
 }
 
-static void pwm_imx27_get_state(struct pwm_chip *chip,
-				struct pwm_device *pwm, struct pwm_state *state)
+static int pwm_imx27_get_state(struct pwm_chip *chip,
+			       struct pwm_device *pwm, struct pwm_state *state)
 {
 	struct pwm_imx27_chip *imx = to_pwm_imx27_chip(chip);
 	u32 period, prescaler, pwm_clk, val;
@@ -128,7 +128,7 @@ static void pwm_imx27_get_state(struct pwm_chip *chip,
 
 	ret = pwm_imx27_clk_prepare_enable(imx);
 	if (ret < 0)
-		return;
+		return ret;
 
 	val = readl(imx->mmio_base + MX3_PWMCR);
 
@@ -170,6 +170,8 @@ static void pwm_imx27_get_state(struct pwm_chip *chip,
 	state->duty_cycle = DIV_ROUND_UP_ULL(tmp, pwm_clk);
 
 	pwm_imx27_clk_disable_unprepare(imx);
+
+	return 0;
 }
 
 static void pwm_imx27_sw_reset(struct pwm_chip *chip)
@@ -313,8 +315,6 @@ static int pwm_imx27_probe(struct platform_device *pdev)
 	if (imx == NULL)
 		return -ENOMEM;
 
-	platform_set_drvdata(pdev, imx);
-
 	imx->clk_ipg = devm_clk_get(&pdev->dev, "ipg");
 	if (IS_ERR(imx->clk_ipg))
 		return dev_err_probe(&pdev->dev, PTR_ERR(imx->clk_ipg),
@@ -329,9 +329,6 @@ static int pwm_imx27_probe(struct platform_device *pdev)
 	imx->chip.dev = &pdev->dev;
 	imx->chip.npwm = 1;
 
-	imx->chip.of_xlate = of_pwm_xlate_with_flags;
-	imx->chip.of_pwm_n_cells = 3;
-
 	imx->mmio_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(imx->mmio_base))
 		return PTR_ERR(imx->mmio_base);
@@ -345,16 +342,7 @@ static int pwm_imx27_probe(struct platform_device *pdev)
 	if (!(pwmcr & MX3_PWMCR_EN))
 		pwm_imx27_clk_disable_unprepare(imx);
 
-	return pwmchip_add(&imx->chip);
-}
-
-static int pwm_imx27_remove(struct platform_device *pdev)
-{
-	struct pwm_imx27_chip *imx;
-
-	imx = platform_get_drvdata(pdev);
-
-	return pwmchip_remove(&imx->chip);
+	return devm_pwmchip_add(&pdev->dev, &imx->chip);
 }
 
 static struct platform_driver imx_pwm_driver = {
@@ -363,7 +351,6 @@ static struct platform_driver imx_pwm_driver = {
 		.of_match_table = pwm_imx27_dt_ids,
 	},
 	.probe = pwm_imx27_probe,
-	.remove = pwm_imx27_remove,
 };
 module_platform_driver(imx_pwm_driver);
 

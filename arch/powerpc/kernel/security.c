@@ -11,11 +11,12 @@
 #include <linux/nospec.h>
 #include <linux/prctl.h>
 #include <linux/seq_buf.h>
+#include <linux/debugfs.h>
 
 #include <asm/asm-prototypes.h>
 #include <asm/code-patching.h>
-#include <asm/debugfs.h>
 #include <asm/security_features.h>
+#include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/inst.h>
 
@@ -34,7 +35,7 @@ static enum branch_cache_flush_type link_stack_flush_type = BRANCH_CACHE_FLUSH_N
 bool barrier_nospec_enabled;
 static bool no_nospec;
 static bool btb_flush_enabled;
-#if defined(CONFIG_PPC_FSL_BOOK3E) || defined(CONFIG_PPC_BOOK3S_64)
+#if defined(CONFIG_PPC_E500) || defined(CONFIG_PPC_BOOK3S_64)
 static bool no_spectrev2;
 #endif
 
@@ -44,7 +45,7 @@ static void enable_barrier_nospec(bool enable)
 	do_barrier_nospec_fixups(enable);
 }
 
-void setup_barrier_nospec(void)
+void __init setup_barrier_nospec(void)
 {
 	bool enable;
 
@@ -106,7 +107,7 @@ DEFINE_DEBUGFS_ATTRIBUTE(fops_barrier_nospec, barrier_nospec_get,
 static __init int barrier_nospec_debugfs_init(void)
 {
 	debugfs_create_file_unsafe("barrier_nospec", 0600,
-				   powerpc_debugfs_root, NULL,
+				   arch_debugfs_dir, NULL,
 				   &fops_barrier_nospec);
 	return 0;
 }
@@ -114,14 +115,14 @@ device_initcall(barrier_nospec_debugfs_init);
 
 static __init int security_feature_debugfs_init(void)
 {
-	debugfs_create_x64("security_features", 0400, powerpc_debugfs_root,
+	debugfs_create_x64("security_features", 0400, arch_debugfs_dir,
 			   &powerpc_security_features);
 	return 0;
 }
 device_initcall(security_feature_debugfs_init);
 #endif /* CONFIG_DEBUG_FS */
 
-#if defined(CONFIG_PPC_FSL_BOOK3E) || defined(CONFIG_PPC_BOOK3S_64)
+#if defined(CONFIG_PPC_E500) || defined(CONFIG_PPC_BOOK3S_64)
 static int __init handle_nospectre_v2(char *p)
 {
 	no_spectrev2 = true;
@@ -129,17 +130,17 @@ static int __init handle_nospectre_v2(char *p)
 	return 0;
 }
 early_param("nospectre_v2", handle_nospectre_v2);
-#endif /* CONFIG_PPC_FSL_BOOK3E || CONFIG_PPC_BOOK3S_64 */
+#endif /* CONFIG_PPC_E500 || CONFIG_PPC_BOOK3S_64 */
 
-#ifdef CONFIG_PPC_FSL_BOOK3E
-void setup_spectre_v2(void)
+#ifdef CONFIG_PPC_E500
+void __init setup_spectre_v2(void)
 {
 	if (no_spectrev2 || cpu_mitigations_off())
 		do_btb_flush_fixups();
 	else
 		btb_flush_enabled = true;
 }
-#endif /* CONFIG_PPC_FSL_BOOK3E */
+#endif /* CONFIG_PPC_E500 */
 
 #ifdef CONFIG_PPC_BOOK3S_64
 ssize_t cpu_show_meltdown(struct device *dev, struct device_attribute *attr, char *buf)
@@ -263,6 +264,11 @@ static int __init handle_no_stf_barrier(char *p)
 
 early_param("no_stf_barrier", handle_no_stf_barrier);
 
+enum stf_barrier_type stf_barrier_type_get(void)
+{
+	return stf_enabled_flush_types;
+}
+
 /* This is the generic flag used by other architectures */
 static int __init handle_ssbd(char *p)
 {
@@ -300,9 +306,7 @@ static void stf_barrier_enable(bool enable)
 void setup_stf_barrier(void)
 {
 	enum stf_barrier_type type;
-	bool enable, hv;
-
-	hv = cpu_has_feature(CPU_FTR_HVMODE);
+	bool enable;
 
 	/* Default to fallback in case fw-features are not available */
 	if (cpu_has_feature(CPU_FTR_ARCH_300))
@@ -315,8 +319,7 @@ void setup_stf_barrier(void)
 		type = STF_BARRIER_NONE;
 
 	enable = security_ftr_enabled(SEC_FTR_FAVOUR_SECURITY) &&
-		(security_ftr_enabled(SEC_FTR_L1D_FLUSH_PR) ||
-		 (security_ftr_enabled(SEC_FTR_L1D_FLUSH_HV) && hv));
+		 security_ftr_enabled(SEC_FTR_STF_BARRIER);
 
 	if (type == STF_BARRIER_FALLBACK) {
 		pr_info("stf-barrier: fallback barrier available\n");
@@ -361,26 +364,27 @@ ssize_t cpu_show_spec_store_bypass(struct device *dev, struct device_attribute *
 
 static int ssb_prctl_get(struct task_struct *task)
 {
-	if (stf_enabled_flush_types == STF_BARRIER_NONE)
-		/*
-		 * We don't have an explicit signal from firmware that we're
-		 * vulnerable or not, we only have certain CPU revisions that
-		 * are known to be vulnerable.
-		 *
-		 * We assume that if we're on another CPU, where the barrier is
-		 * NONE, then we are not vulnerable.
-		 */
+	/*
+	 * The STF_BARRIER feature is on by default, so if it's off that means
+	 * firmware has explicitly said the CPU is not vulnerable via either
+	 * the hypercall or device tree.
+	 */
+	if (!security_ftr_enabled(SEC_FTR_STF_BARRIER))
 		return PR_SPEC_NOT_AFFECTED;
-	else
-		/*
-		 * If we do have a barrier type then we are vulnerable. The
-		 * barrier is not a global or per-process mitigation, so the
-		 * only value we can report here is PR_SPEC_ENABLE, which
-		 * appears as "vulnerable" in /proc.
-		 */
-		return PR_SPEC_ENABLE;
 
-	return -EINVAL;
+	/*
+	 * If the system's CPU has no known barrier (see setup_stf_barrier())
+	 * then assume that the CPU is not vulnerable.
+	 */
+	if (stf_enabled_flush_types == STF_BARRIER_NONE)
+		return PR_SPEC_NOT_AFFECTED;
+
+	/*
+	 * Otherwise the CPU is vulnerable. The barrier is not a global or
+	 * per-process mitigation, so the only value that can be reported here
+	 * is PR_SPEC_ENABLE, which appears as "vulnerable" in /proc.
+	 */
+	return PR_SPEC_ENABLE;
 }
 
 int arch_prctl_spec_ctrl_get(struct task_struct *task, unsigned long which)
@@ -423,7 +427,7 @@ DEFINE_DEBUGFS_ATTRIBUTE(fops_stf_barrier, stf_barrier_get, stf_barrier_set,
 
 static __init int stf_barrier_debugfs_init(void)
 {
-	debugfs_create_file_unsafe("stf_barrier", 0600, powerpc_debugfs_root,
+	debugfs_create_file_unsafe("stf_barrier", 0600, arch_debugfs_dir,
 				   NULL, &fops_stf_barrier);
 	return 0;
 }
@@ -432,26 +436,29 @@ device_initcall(stf_barrier_debugfs_init);
 
 static void update_branch_cache_flush(void)
 {
-	u32 *site;
+	u32 *site, __maybe_unused *site2;
 
 #ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
 	site = &patch__call_kvm_flush_link_stack;
+	site2 = &patch__call_kvm_flush_link_stack_p9;
 	// This controls the branch from guest_exit_cont to kvm_flush_link_stack
 	if (link_stack_flush_type == BRANCH_CACHE_FLUSH_NONE) {
-		patch_instruction_site(site, ppc_inst(PPC_INST_NOP));
+		patch_instruction_site(site, ppc_inst(PPC_RAW_NOP()));
+		patch_instruction_site(site2, ppc_inst(PPC_RAW_NOP()));
 	} else {
 		// Could use HW flush, but that could also flush count cache
 		patch_branch_site(site, (u64)&kvm_flush_link_stack, BRANCH_SET_LINK);
+		patch_branch_site(site2, (u64)&kvm_flush_link_stack, BRANCH_SET_LINK);
 	}
 #endif
 
 	// Patch out the bcctr first, then nop the rest
 	site = &patch__call_flush_branch_caches3;
-	patch_instruction_site(site, ppc_inst(PPC_INST_NOP));
+	patch_instruction_site(site, ppc_inst(PPC_RAW_NOP()));
 	site = &patch__call_flush_branch_caches2;
-	patch_instruction_site(site, ppc_inst(PPC_INST_NOP));
+	patch_instruction_site(site, ppc_inst(PPC_RAW_NOP()));
 	site = &patch__call_flush_branch_caches1;
-	patch_instruction_site(site, ppc_inst(PPC_INST_NOP));
+	patch_instruction_site(site, ppc_inst(PPC_RAW_NOP()));
 
 	// This controls the branch from _switch to flush_branch_caches
 	if (count_cache_flush_type == BRANCH_CACHE_FLUSH_NONE &&
@@ -474,12 +481,12 @@ static void update_branch_cache_flush(void)
 		// If we just need to flush the link stack, early return
 		if (count_cache_flush_type == BRANCH_CACHE_FLUSH_NONE) {
 			patch_instruction_site(&patch__flush_link_stack_return,
-					       ppc_inst(PPC_INST_BLR));
+					       ppc_inst(PPC_RAW_BLR()));
 
 		// If we have flush instruction, early return
 		} else if (count_cache_flush_type == BRANCH_CACHE_FLUSH_HW) {
 			patch_instruction_site(&patch__flush_count_cache_return,
-					       ppc_inst(PPC_INST_BLR));
+					       ppc_inst(PPC_RAW_BLR()));
 		}
 	}
 }
@@ -742,14 +749,29 @@ static int count_cache_flush_get(void *data, u64 *val)
 	return 0;
 }
 
+static int link_stack_flush_get(void *data, u64 *val)
+{
+	if (link_stack_flush_type == BRANCH_CACHE_FLUSH_NONE)
+		*val = 0;
+	else
+		*val = 1;
+
+	return 0;
+}
+
 DEFINE_DEBUGFS_ATTRIBUTE(fops_count_cache_flush, count_cache_flush_get,
+			 count_cache_flush_set, "%llu\n");
+DEFINE_DEBUGFS_ATTRIBUTE(fops_link_stack_flush, link_stack_flush_get,
 			 count_cache_flush_set, "%llu\n");
 
 static __init int count_cache_flush_debugfs_init(void)
 {
 	debugfs_create_file_unsafe("count_cache_flush", 0600,
-				   powerpc_debugfs_root, NULL,
+				   arch_debugfs_dir, NULL,
 				   &fops_count_cache_flush);
+	debugfs_create_file_unsafe("link_stack_flush", 0600,
+				   arch_debugfs_dir, NULL,
+				   &fops_link_stack_flush);
 	return 0;
 }
 device_initcall(count_cache_flush_debugfs_init);
@@ -834,9 +856,9 @@ DEFINE_SIMPLE_ATTRIBUTE(fops_uaccess_flush, uaccess_flush_get, uaccess_flush_set
 
 static __init int rfi_flush_debugfs_init(void)
 {
-	debugfs_create_file("rfi_flush", 0600, powerpc_debugfs_root, NULL, &fops_rfi_flush);
-	debugfs_create_file("entry_flush", 0600, powerpc_debugfs_root, NULL, &fops_entry_flush);
-	debugfs_create_file("uaccess_flush", 0600, powerpc_debugfs_root, NULL, &fops_uaccess_flush);
+	debugfs_create_file("rfi_flush", 0600, arch_debugfs_dir, NULL, &fops_rfi_flush);
+	debugfs_create_file("entry_flush", 0600, arch_debugfs_dir, NULL, &fops_entry_flush);
+	debugfs_create_file("uaccess_flush", 0600, arch_debugfs_dir, NULL, &fops_uaccess_flush);
 	return 0;
 }
 device_initcall(rfi_flush_debugfs_init);

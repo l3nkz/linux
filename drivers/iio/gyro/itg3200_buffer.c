@@ -61,9 +61,9 @@ static irqreturn_t itg3200_trigger_handler(int irq, void *p)
 
 	iio_push_to_buffers_with_timestamp(indio_dev, &scan, pf->timestamp);
 
+error_ret:
 	iio_trigger_notify_done(indio_dev->trig);
 
-error_ret:
 	return IRQ_HANDLED;
 }
 
@@ -114,7 +114,7 @@ int itg3200_probe_trigger(struct iio_dev *indio_dev)
 	struct itg3200 *st = iio_priv(indio_dev);
 
 	st->trig = iio_trigger_alloc(&st->i2c->dev, "%s-dev%d", indio_dev->name,
-				     indio_dev->id);
+				     iio_device_id(indio_dev));
 	if (!st->trig)
 		return -ENOMEM;
 

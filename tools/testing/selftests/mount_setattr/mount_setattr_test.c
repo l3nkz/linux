@@ -18,6 +18,7 @@
 #include <grp.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#include <linux/mount.h>
 
 #include "../kselftest_harness.h"
 
@@ -103,13 +104,6 @@
 	#else
 		#define __NR_mount_setattr 442
 	#endif
-
-struct mount_attr {
-	__u64 attr_set;
-	__u64 attr_clr;
-	__u64 propagation;
-	__u64 userns_fd;
-};
 #endif
 
 #ifndef __NR_open_tree
@@ -134,6 +128,10 @@ struct mount_attr {
 
 #ifndef MOUNT_ATTR_IDMAP
 #define MOUNT_ATTR_IDMAP 0x00100000
+#endif
+
+#ifndef MOUNT_ATTR_NOSYMFOLLOW
+#define MOUNT_ATTR_NOSYMFOLLOW 0x00200000
 #endif
 
 static inline int sys_mount_setattr(int dfd, const char *path, unsigned int flags,
@@ -235,6 +233,10 @@ static int prepare_unpriv_mountns(void)
 	return 0;
 }
 
+#ifndef ST_NOSYMFOLLOW
+#define ST_NOSYMFOLLOW 0x2000 /* do not follow symlinks */
+#endif
+
 static int read_mnt_flags(const char *path)
 {
 	int ret;
@@ -245,9 +247,9 @@ static int read_mnt_flags(const char *path)
 	if (ret != 0)
 		return -EINVAL;
 
-	if (stat.f_flag &
-	    ~(ST_RDONLY | ST_NOSUID | ST_NODEV | ST_NOEXEC | ST_NOATIME |
-	      ST_NODIRATIME | ST_RELATIME | ST_SYNCHRONOUS | ST_MANDLOCK))
+	if (stat.f_flag & ~(ST_RDONLY | ST_NOSUID | ST_NODEV | ST_NOEXEC |
+			    ST_NOATIME | ST_NODIRATIME | ST_RELATIME |
+			    ST_SYNCHRONOUS | ST_MANDLOCK | ST_NOSYMFOLLOW))
 		return -EINVAL;
 
 	mnt_flags = 0;
@@ -269,6 +271,8 @@ static int read_mnt_flags(const char *path)
 		mnt_flags |= MS_SYNCHRONOUS;
 	if (stat.f_flag & ST_MANDLOCK)
 		mnt_flags |= ST_MANDLOCK;
+	if (stat.f_flag & ST_NOSYMFOLLOW)
+		mnt_flags |= ST_NOSYMFOLLOW;
 
 	return mnt_flags;
 }
@@ -368,8 +372,13 @@ static bool mount_setattr_supported(void)
 FIXTURE(mount_setattr) {
 };
 
+#define NOSYMFOLLOW_TARGET "/mnt/A/AA/data"
+#define NOSYMFOLLOW_SYMLINK "/mnt/A/AA/symlink"
+
 FIXTURE_SETUP(mount_setattr)
 {
+	int fd = -EBADF;
+
 	if (!mount_setattr_supported())
 		SKIP(return, "mount_setattr syscall not supported");
 
@@ -412,6 +421,11 @@ FIXTURE_SETUP(mount_setattr)
 
 	ASSERT_EQ(mount("testing", "/tmp/B/BB", "devpts",
 			MS_RELATIME | MS_NOEXEC | MS_RDONLY, 0), 0);
+
+	fd = creat(NOSYMFOLLOW_TARGET, O_RDWR | O_CLOEXEC);
+	ASSERT_GT(fd, 0);
+	ASSERT_EQ(symlink(NOSYMFOLLOW_TARGET, NOSYMFOLLOW_SYMLINK), 0);
+	ASSERT_EQ(close(fd), 0);
 }
 
 FIXTURE_TEARDOWN(mount_setattr)
@@ -1216,7 +1230,7 @@ static int get_userns_fd(unsigned long nsid, unsigned long hostid, unsigned long
 }
 
 /**
- * Validate that an attached mount in our mount namespace can be idmapped.
+ * Validate that an attached mount in our mount namespace cannot be idmapped.
  * (The kernel enforces that the mount's mount namespace and the caller's mount
  *  namespace match.)
  */
@@ -1239,7 +1253,7 @@ TEST_F(mount_setattr_idmapped, attached_mount_inside_current_mount_namespace)
 
 	attr.userns_fd	= get_userns_fd(0, 10000, 10000);
 	ASSERT_GE(attr.userns_fd, 0);
-	ASSERT_EQ(sys_mount_setattr(open_tree_fd, "", AT_EMPTY_PATH, &attr, sizeof(attr)), 0);
+	ASSERT_NE(sys_mount_setattr(open_tree_fd, "", AT_EMPTY_PATH, &attr, sizeof(attr)), 0);
 	ASSERT_EQ(close(attr.userns_fd), 0);
 	ASSERT_EQ(close(open_tree_fd), 0);
 }
@@ -1419,6 +1433,68 @@ TEST_F(mount_setattr_idmapped, idmap_mount_tree_invalid)
 	ASSERT_EQ(expected_uid_gid(-EBADF, "/tmp/B/BB/b", 0, 0, 0), 0);
 	ASSERT_EQ(expected_uid_gid(open_tree_fd, "B/b", 0, 0, 0), 0);
 	ASSERT_EQ(expected_uid_gid(open_tree_fd, "B/BB/b", 0, 0, 0), 0);
+}
+
+TEST_F(mount_setattr, mount_attr_nosymfollow)
+{
+	int fd;
+	unsigned int old_flags = 0, new_flags = 0, expected_flags = 0;
+	struct mount_attr attr = {
+		.attr_set	= MOUNT_ATTR_NOSYMFOLLOW,
+	};
+
+	if (!mount_setattr_supported())
+		SKIP(return, "mount_setattr syscall not supported");
+
+	fd = open(NOSYMFOLLOW_SYMLINK, O_RDWR | O_CLOEXEC);
+	ASSERT_GT(fd, 0);
+	ASSERT_EQ(close(fd), 0);
+
+	old_flags = read_mnt_flags("/mnt/A");
+	ASSERT_GT(old_flags, 0);
+
+	ASSERT_EQ(sys_mount_setattr(-1, "/mnt/A", AT_RECURSIVE, &attr, sizeof(attr)), 0);
+
+	expected_flags = old_flags;
+	expected_flags |= ST_NOSYMFOLLOW;
+
+	new_flags = read_mnt_flags("/mnt/A");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	new_flags = read_mnt_flags("/mnt/A/AA");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	new_flags = read_mnt_flags("/mnt/A/AA/B");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	new_flags = read_mnt_flags("/mnt/A/AA/B/BB");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	fd = open(NOSYMFOLLOW_SYMLINK, O_RDWR | O_CLOEXEC);
+	ASSERT_LT(fd, 0);
+	ASSERT_EQ(errno, ELOOP);
+
+	attr.attr_set &= ~MOUNT_ATTR_NOSYMFOLLOW;
+	attr.attr_clr |= MOUNT_ATTR_NOSYMFOLLOW;
+
+	ASSERT_EQ(sys_mount_setattr(-1, "/mnt/A", AT_RECURSIVE, &attr, sizeof(attr)), 0);
+
+	expected_flags &= ~ST_NOSYMFOLLOW;
+	new_flags = read_mnt_flags("/mnt/A");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	new_flags = read_mnt_flags("/mnt/A/AA");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	new_flags = read_mnt_flags("/mnt/A/AA/B");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	new_flags = read_mnt_flags("/mnt/A/AA/B/BB");
+	ASSERT_EQ(new_flags, expected_flags);
+
+	fd = open(NOSYMFOLLOW_SYMLINK, O_RDWR | O_CLOEXEC);
+	ASSERT_GT(fd, 0);
+	ASSERT_EQ(close(fd), 0);
 }
 
 TEST_HARNESS_MAIN

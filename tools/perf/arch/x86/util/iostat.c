@@ -10,6 +10,7 @@
 #include <api/fs/fs.h>
 #include <linux/kernel.h>
 #include <linux/err.h>
+#include <linux/zalloc.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -100,8 +101,8 @@ static void iio_root_ports_list_free(struct iio_root_ports_list *list)
 
 	if (list) {
 		for (idx = 0; idx < list->nr_entries; idx++)
-			free(list->rps[idx]);
-		free(list->rps);
+			zfree(&list->rps[idx]);
+		zfree(&list->rps);
 		free(list);
 	}
 }
@@ -316,13 +317,13 @@ static int iostat_event_group(struct evlist *evl,
 		sprintf(iostat_cmd, iostat_cmd_template,
 			list->rps[idx]->pmu_idx, list->rps[idx]->pmu_idx,
 			list->rps[idx]->pmu_idx, list->rps[idx]->pmu_idx);
-		ret = parse_events(evl, iostat_cmd, NULL);
+		ret = parse_event(evl, iostat_cmd);
 		if (ret)
 			goto err;
 	}
 
 	evlist__for_each_entry(evl, evsel) {
-		evsel->priv = list->rps[evsel->idx / metrics_count];
+		evsel->priv = list->rps[evsel->core.idx / metrics_count];
 	}
 	list->nr_entries = 0;
 err:
@@ -390,7 +391,7 @@ void iostat_release(struct evlist *evlist)
 	evlist__for_each_entry(evlist, evsel) {
 		if (rp != evsel->priv) {
 			rp = evsel->priv;
-			free(evsel->priv);
+			zfree(&evsel->priv);
 		}
 	}
 }
@@ -428,11 +429,11 @@ void iostat_print_metric(struct perf_stat_config *config, struct evsel *evsel,
 {
 	double iostat_value = 0;
 	u64 prev_count_val = 0;
-	const char *iostat_metric = iostat_metric_by_idx(evsel->idx);
+	const char *iostat_metric = iostat_metric_by_idx(evsel->core.idx);
 	u8 die = ((struct iio_root_port *)evsel->priv)->die;
 	struct perf_counts_values *count = perf_counts(evsel->counts, die, 0);
 
-	if (count->run && count->ena) {
+	if (count && count->run && count->ena) {
 		if (evsel->prev_raw_counts && !out->force_header) {
 			struct perf_counts_values *prev_count =
 				perf_counts(evsel->prev_raw_counts, die, 0);
@@ -449,7 +450,7 @@ void iostat_print_metric(struct perf_stat_config *config, struct evsel *evsel,
 
 void iostat_print_counters(struct evlist *evlist,
 			   struct perf_stat_config *config, struct timespec *ts,
-			   char *prefix, iostat_print_counter_t print_cnt_cb)
+			   char *prefix, iostat_print_counter_t print_cnt_cb, void *arg)
 {
 	void *perf_device = NULL;
 	struct evsel *counter = evlist__first(evlist);
@@ -464,7 +465,7 @@ void iostat_print_counters(struct evlist *evlist,
 			iostat_prefix(evlist, config, prefix, ts);
 			fprintf(config->output, "\n%s", prefix);
 		}
-		print_cnt_cb(config, counter, prefix);
+		print_cnt_cb(config, counter, arg);
 	}
 	fputc('\n', config->output);
 }

@@ -14,11 +14,11 @@
 #include <linux/gfp.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/debugfs.h>
 
 #include <asm/machdep.h>
 #include <asm/firmware.h>
 #include <asm/opal.h>
-#include <asm/debugfs.h>
 #include <asm/prom.h>
 
 static u64 opal_scom_unmangle(u64 addr)
@@ -168,7 +168,7 @@ static int scom_debug_init_one(struct dentry *root, struct device_node *dn,
 	ent->path.size = strlen((char *)ent->path.data);
 
 	dir = debugfs_create_dir(ent->name, root);
-	if (!dir) {
+	if (IS_ERR(dir)) {
 		kfree(ent->path.data);
 		kfree(ent);
 		return -1;
@@ -189,8 +189,8 @@ static int scom_debug_init(void)
 	if (!firmware_has_feature(FW_FEATURE_OPAL))
 		return 0;
 
-	root = debugfs_create_dir("scom", powerpc_debugfs_root);
-	if (!root)
+	root = debugfs_create_dir("scom", arch_debugfs_dir);
+	if (IS_ERR(root))
 		return -1;
 
 	rc = 0;

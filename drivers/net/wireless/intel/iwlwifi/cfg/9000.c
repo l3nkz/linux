@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright (C) 2015-2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2020 Intel Corporation
+ * Copyright (C) 2018-2021, 2023 Intel Corporation
  */
 #include <linux/module.h>
 #include <linux/stringify.h>
@@ -26,12 +26,12 @@
 #define IWL9000_SMEM_OFFSET		0x400000
 #define IWL9000_SMEM_LEN		0x68000
 
-#define  IWL9000_FW_PRE "iwlwifi-9000-pu-b0-jf-b0-"
-#define  IWL9260_FW_PRE "iwlwifi-9260-th-b0-jf-b0-"
+#define  IWL9000_FW_PRE "iwlwifi-9000-pu-b0-jf-b0"
+#define  IWL9260_FW_PRE "iwlwifi-9260-th-b0-jf-b0"
 #define IWL9000_MODULE_FIRMWARE(api) \
-	IWL9000_FW_PRE __stringify(api) ".ucode"
+	IWL9000_FW_PRE "-" __stringify(api) ".ucode"
 #define IWL9260_MODULE_FIRMWARE(api) \
-	IWL9260_FW_PRE __stringify(api) ".ucode"
+	IWL9260_FW_PRE "-" __stringify(api) ".ucode"
 
 static const struct iwl_base_params iwl9000_base_params = {
 	.eeprom_size = OTP_LOW_IMAGE_SIZE_32K,
@@ -89,7 +89,7 @@ static const struct iwl_tt_params iwl9000_tt_params = {
 	.apmg_not_supported = true,					\
 	.num_rbds = 512,						\
 	.vht_mu_mimo_supported = true,					\
-	.mac_addr_from_csr = true,					\
+	.mac_addr_from_csr = 0x380,					\
 	.nvm_type = IWL_NVM_EXT,					\
 	.dbgc_supported = true,						\
 	.min_umac_error_event_table = 0x800000,				\
@@ -171,8 +171,12 @@ const char iwl9260_killer_1550_name[] =
 	"Killer (R) Wireless-AC 1550 Wireless Network Adapter (9260NGW) 160MHz";
 const char iwl9560_killer_1550i_name[] =
 	"Killer (R) Wireless-AC 1550i Wireless Network Adapter (9560NGW)";
+const char iwl9560_killer_1550i_160_name[] =
+	"Killer(R) Wireless-AC 1550i Wireless Network Adapter (9560NGW) 160MHz";
 const char iwl9560_killer_1550s_name[] =
 	"Killer (R) Wireless-AC 1550s Wireless Network Adapter (9560NGW)";
+const char iwl9560_killer_1550s_160_name[] =
+	"Killer(R) Wireless-AC 1550s Wireless Network Adapter (9560D2W) 160MHz";
 
 const struct iwl_cfg iwl9260_2ac_cfg = {
 	.fw_name_pre = IWL9260_FW_PRE,

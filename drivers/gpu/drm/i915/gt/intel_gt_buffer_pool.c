@@ -3,16 +3,12 @@
  * Copyright © 2014-2018 Intel Corporation
  */
 
+#include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_object.h"
 
 #include "i915_drv.h"
 #include "intel_engine_pm.h"
 #include "intel_gt_buffer_pool.h"
-
-static struct intel_gt *to_gt(struct intel_gt_buffer_pool *pool)
-{
-	return container_of(pool, struct intel_gt, buffer_pool);
-}
 
 static struct list_head *
 bucket_for_size(struct intel_gt_buffer_pool *pool, size_t sz)
@@ -92,18 +88,19 @@ static void pool_free_work(struct work_struct *wrk)
 {
 	struct intel_gt_buffer_pool *pool =
 		container_of(wrk, typeof(*pool), work.work);
+	struct intel_gt *gt = container_of(pool, struct intel_gt, buffer_pool);
 
 	if (pool_free_older_than(pool, HZ))
-		schedule_delayed_work(&pool->work,
-				      round_jiffies_up_relative(HZ));
+		queue_delayed_work(gt->i915->unordered_wq, &pool->work,
+				   round_jiffies_up_relative(HZ));
 }
 
-__i915_active_call
 static void pool_retire(struct i915_active *ref)
 {
 	struct intel_gt_buffer_pool_node *node =
 		container_of(ref, typeof(*node), active);
 	struct intel_gt_buffer_pool *pool = node->pool;
+	struct intel_gt *gt = container_of(pool, struct intel_gt, buffer_pool);
 	struct list_head *list = bucket_for_size(pool, node->obj->base.size);
 	unsigned long flags;
 
@@ -121,8 +118,8 @@ static void pool_retire(struct i915_active *ref)
 	WRITE_ONCE(node->age, jiffies ?: 1); /* 0 reserved for active nodes */
 	spin_unlock_irqrestore(&pool->lock, flags);
 
-	schedule_delayed_work(&pool->work,
-			      round_jiffies_up_relative(HZ));
+	queue_delayed_work(gt->i915->unordered_wq, &pool->work,
+			   round_jiffies_up_relative(HZ));
 }
 
 void intel_gt_buffer_pool_mark_used(struct intel_gt_buffer_pool_node *node)
@@ -142,7 +139,7 @@ static struct intel_gt_buffer_pool_node *
 node_create(struct intel_gt_buffer_pool *pool, size_t sz,
 	    enum i915_map_type type)
 {
-	struct intel_gt *gt = to_gt(pool);
+	struct intel_gt *gt = container_of(pool, struct intel_gt, buffer_pool);
 	struct intel_gt_buffer_pool_node *node;
 	struct drm_i915_gem_object *obj;
 
@@ -154,7 +151,7 @@ node_create(struct intel_gt_buffer_pool *pool, size_t sz,
 	node->age = 0;
 	node->pool = pool;
 	node->pinned = false;
-	i915_active_init(&node->active, NULL, pool_retire);
+	i915_active_init(&node->active, NULL, pool_retire, 0);
 
 	obj = i915_gem_object_create_internal(gt->i915, sz);
 	if (IS_ERR(obj)) {
@@ -245,8 +242,6 @@ void intel_gt_fini_buffer_pool(struct intel_gt *gt)
 {
 	struct intel_gt_buffer_pool *pool = &gt->buffer_pool;
 	int n;
-
-	intel_gt_flush_buffer_pool(gt);
 
 	for (n = 0; n < ARRAY_SIZE(pool->cache_list); n++)
 		GEM_BUG_ON(!list_empty(&pool->cache_list[n]));

@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/skbuff.h>
 #include <linux/icmp.h>
+#include <linux/rcupdate.h>
 #include <linux/sysctl.h>
 #include <net/ipv6_frag.h>
 
@@ -24,8 +25,6 @@
 #endif
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/ipv6/nf_defrag_ipv6.h>
-
-extern unsigned int nf_frag_pernet_id;
 
 static DEFINE_MUTEX(defrag6_mutex);
 
@@ -91,14 +90,18 @@ static const struct nf_hook_ops ipv6_defrag_ops[] = {
 
 static void __net_exit defrag6_net_exit(struct net *net)
 {
-	struct nft_ct_frag6_pernet *nf_frag = net_generic(net, nf_frag_pernet_id);
-
-	if (nf_frag->users) {
+	if (net->nf.defrag_ipv6_users) {
 		nf_unregister_net_hooks(net, ipv6_defrag_ops,
 					ARRAY_SIZE(ipv6_defrag_ops));
-		nf_frag->users = 0;
+		net->nf.defrag_ipv6_users = 0;
 	}
 }
+
+static const struct nf_defrag_hook defrag_hook = {
+	.owner = THIS_MODULE,
+	.enable = nf_defrag_ipv6_enable,
+	.disable = nf_defrag_ipv6_disable,
+};
 
 static struct pernet_operations defrag6_net_ops = {
 	.exit = defrag6_net_exit,
@@ -118,6 +121,9 @@ static int __init nf_defrag_init(void)
 		pr_err("nf_defrag_ipv6: can't register pernet ops\n");
 		goto cleanup_frag6;
 	}
+
+	rcu_assign_pointer(nf_defrag_v6_hook, &defrag_hook);
+
 	return ret;
 
 cleanup_frag6:
@@ -128,30 +134,30 @@ cleanup_frag6:
 
 static void __exit nf_defrag_fini(void)
 {
+	rcu_assign_pointer(nf_defrag_v6_hook, NULL);
 	unregister_pernet_subsys(&defrag6_net_ops);
 	nf_ct_frag6_cleanup();
 }
 
 int nf_defrag_ipv6_enable(struct net *net)
 {
-	struct nft_ct_frag6_pernet *nf_frag = net_generic(net, nf_frag_pernet_id);
 	int err = 0;
 
 	mutex_lock(&defrag6_mutex);
-	if (nf_frag->users == UINT_MAX) {
+	if (net->nf.defrag_ipv6_users == UINT_MAX) {
 		err = -EOVERFLOW;
 		goto out_unlock;
 	}
 
-	if (nf_frag->users) {
-		nf_frag->users++;
+	if (net->nf.defrag_ipv6_users) {
+		net->nf.defrag_ipv6_users++;
 		goto out_unlock;
 	}
 
 	err = nf_register_net_hooks(net, ipv6_defrag_ops,
 				    ARRAY_SIZE(ipv6_defrag_ops));
 	if (err == 0)
-		nf_frag->users = 1;
+		net->nf.defrag_ipv6_users = 1;
 
  out_unlock:
 	mutex_unlock(&defrag6_mutex);
@@ -161,12 +167,10 @@ EXPORT_SYMBOL_GPL(nf_defrag_ipv6_enable);
 
 void nf_defrag_ipv6_disable(struct net *net)
 {
-	struct nft_ct_frag6_pernet *nf_frag = net_generic(net, nf_frag_pernet_id);
-
 	mutex_lock(&defrag6_mutex);
-	if (nf_frag->users) {
-		nf_frag->users--;
-		if (nf_frag->users == 0)
+	if (net->nf.defrag_ipv6_users) {
+		net->nf.defrag_ipv6_users--;
+		if (net->nf.defrag_ipv6_users == 0)
 			nf_unregister_net_hooks(net, ipv6_defrag_ops,
 						ARRAY_SIZE(ipv6_defrag_ops));
 	}

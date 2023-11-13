@@ -9,6 +9,7 @@
 /* Maximum buffer lengths for all control queue types */
 #define ICE_AQ_MAX_BUF_LEN 4096
 #define ICE_MBXQ_MAX_BUF_LEN 4096
+#define ICE_SBQ_MAX_BUF_LEN 512
 
 #define ICE_CTL_Q_DESC(R, i) \
 	(&(((struct ice_aq_desc *)((R).desc_buf.va))[i]))
@@ -29,11 +30,11 @@ enum ice_ctl_q {
 	ICE_CTL_Q_UNKNOWN = 0,
 	ICE_CTL_Q_ADMIN,
 	ICE_CTL_Q_MAILBOX,
+	ICE_CTL_Q_SB,
 };
 
 /* Control Queue timeout settings - max delay 1s */
-#define ICE_CTL_Q_SQ_CMD_TIMEOUT	10000 /* Count 10000 times */
-#define ICE_CTL_Q_SQ_CMD_USEC		100   /* Check every 100usec */
+#define ICE_CTL_Q_SQ_CMD_TIMEOUT	HZ    /* Wait max 1s */
 #define ICE_CTL_Q_ADMIN_INIT_TIMEOUT	10    /* Count 10 times */
 #define ICE_CTL_Q_ADMIN_INIT_MSEC	100   /* Check every 100msec */
 
@@ -85,7 +86,6 @@ struct ice_ctl_q_info {
 	enum ice_ctl_q qtype;
 	struct ice_ctl_q_ring rq;	/* receive queue */
 	struct ice_ctl_q_ring sq;	/* send queue */
-	u32 sq_cmd_timeout;		/* send queue cmd write back timeout */
 	u16 num_rq_entries;		/* receive queue depth */
 	u16 num_sq_entries;		/* send queue depth */
 	u16 rq_buf_size;		/* receive queue buffer size */

@@ -36,7 +36,7 @@ static int fallback_set_params(struct eeprom_req_info *request,
 	if (request->page)
 		offset = request->page * ETH_MODULE_EEPROM_PAGE_LEN + offset;
 
-	if (modinfo->type == ETH_MODULE_SFF_8079 &&
+	if (modinfo->type == ETH_MODULE_SFF_8472 &&
 	    request->i2c_address == 0x51)
 		offset += ETH_MODULE_EEPROM_PAGE_LEN * 2;
 
@@ -51,8 +51,7 @@ static int fallback_set_params(struct eeprom_req_info *request,
 }
 
 static int eeprom_fallback(struct eeprom_req_info *request,
-			   struct eeprom_reply_data *reply,
-			   struct genl_info *info)
+			   struct eeprom_reply_data *reply)
 {
 	struct net_device *dev = reply->base.dev;
 	struct ethtool_modinfo modinfo = {0};
@@ -103,7 +102,7 @@ static int get_module_eeprom_by_page(struct net_device *dev,
 
 static int eeprom_prepare_data(const struct ethnl_req_info *req_base,
 			       struct ethnl_reply_data *reply_base,
-			       struct genl_info *info)
+			       const struct genl_info *info)
 {
 	struct eeprom_reply_data *reply = MODULE_EEPROM_REPDATA(reply_base);
 	struct eeprom_req_info *request = MODULE_EEPROM_REQINFO(req_base);
@@ -140,7 +139,7 @@ err_free:
 	kfree(page_data.data);
 
 	if (ret == -EOPNOTSUPP)
-		return eeprom_fallback(request, reply, info);
+		return eeprom_fallback(request, reply);
 	return ret;
 }
 
@@ -159,9 +158,6 @@ static int eeprom_parse_request(struct ethnl_req_info *req_info, struct nlattr *
 	request->offset = nla_get_u32(tb[ETHTOOL_A_MODULE_EEPROM_OFFSET]);
 	request->length = nla_get_u32(tb[ETHTOOL_A_MODULE_EEPROM_LENGTH]);
 
-	if (!request->length)
-		return -EINVAL;
-
 	/* The following set of conditions limit the API to only dump 1/2
 	 * EEPROM page without crossing low page boundary located at offset 128.
 	 * This means user may only request dumps of length limited to 128 from
@@ -179,10 +175,6 @@ static int eeprom_parse_request(struct ethnl_req_info *req_info, struct nlattr *
 	    request->offset + request->length > ETH_MODULE_EEPROM_PAGE_LEN) {
 		NL_SET_ERR_MSG_ATTR(extack, tb[ETHTOOL_A_MODULE_EEPROM_LENGTH],
 				    "reading cross half page boundary is illegal");
-		return -EINVAL;
-	} else if (request->offset >= ETH_MODULE_EEPROM_PAGE_LEN * 2) {
-		NL_SET_ERR_MSG_ATTR(extack, tb[ETHTOOL_A_MODULE_EEPROM_OFFSET],
-				    "offset is out of bounds");
 		return -EINVAL;
 	} else if (request->offset + request->length > ETH_MODULE_EEPROM_PAGE_LEN * 2) {
 		NL_SET_ERR_MSG_ATTR(extack, tb[ETHTOOL_A_MODULE_EEPROM_LENGTH],
@@ -236,8 +228,10 @@ const struct ethnl_request_ops ethnl_module_eeprom_request_ops = {
 
 const struct nla_policy ethnl_module_eeprom_get_policy[] = {
 	[ETHTOOL_A_MODULE_EEPROM_HEADER]	= NLA_POLICY_NESTED(ethnl_header_policy),
-	[ETHTOOL_A_MODULE_EEPROM_OFFSET]	= { .type = NLA_U32 },
-	[ETHTOOL_A_MODULE_EEPROM_LENGTH]	= { .type = NLA_U32 },
+	[ETHTOOL_A_MODULE_EEPROM_OFFSET]	=
+		NLA_POLICY_MAX(NLA_U32, ETH_MODULE_EEPROM_PAGE_LEN * 2 - 1),
+	[ETHTOOL_A_MODULE_EEPROM_LENGTH]	=
+		NLA_POLICY_RANGE(NLA_U32, 1, ETH_MODULE_EEPROM_PAGE_LEN),
 	[ETHTOOL_A_MODULE_EEPROM_PAGE]		= { .type = NLA_U8 },
 	[ETHTOOL_A_MODULE_EEPROM_BANK]		= { .type = NLA_U8 },
 	[ETHTOOL_A_MODULE_EEPROM_I2C_ADDRESS]	=

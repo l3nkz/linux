@@ -417,18 +417,24 @@ See also the examples in :ref:`control`.
       - any
       - An unsigned 32-bit valued control ranging from minimum to maximum
 	inclusive. The step value indicates the increment between values.
-    * - ``V4L2_CTRL_TYPE_MPEG2_SLICE_PARAMS``
+    * - ``V4L2_CTRL_TYPE_MPEG2_QUANTISATION``
       - n/a
       - n/a
       - n/a
-      - A struct :c:type:`v4l2_ctrl_mpeg2_slice_params`, containing MPEG-2
-	slice parameters for stateless video decoders.
-    * - ``V4L2_CTRL_TYPE_MPEG2_QUANTIZATION``
+      - A struct :c:type:`v4l2_ctrl_mpeg2_quantisation`, containing MPEG-2
+	quantisation matrices for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_MPEG2_SEQUENCE``
       - n/a
       - n/a
       - n/a
-      - A struct :c:type:`v4l2_ctrl_mpeg2_quantization`, containing MPEG-2
-	quantization matrices for stateless video decoders.
+      - A struct :c:type:`v4l2_ctrl_mpeg2_sequence`, containing MPEG-2
+	sequence parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_MPEG2_PICTURE``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_mpeg2_picture`, containing MPEG-2
+	picture parameters for stateless video decoders.
     * - ``V4L2_CTRL_TYPE_AREA``
       - n/a
       - n/a
@@ -489,12 +495,60 @@ See also the examples in :ref:`control`.
       - n/a
       - A struct :c:type:`v4l2_ctrl_hevc_slice_params`, containing HEVC
 	slice parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_HEVC_SCALING_MATRIX``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_hevc_scaling_matrix`, containing HEVC
+	scaling matrix for stateless video decoders.
     * - ``V4L2_CTRL_TYPE_VP8_FRAME``
       - n/a
       - n/a
       - n/a
       - A struct :c:type:`v4l2_ctrl_vp8_frame`, containing VP8
 	frame parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_HEVC_DECODE_PARAMS``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_hevc_decode_params`, containing HEVC
+	decoding parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_VP9_COMPRESSED_HDR``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_vp9_compressed_hdr`, containing VP9
+	probabilities updates for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_VP9_FRAME``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_vp9_frame`, containing VP9
+	frame decode parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_AV1_SEQUENCE``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_av1_sequence`, containing AV1 Sequence OBU
+	decoding parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_AV1_TILE_GROUP_ENTRY``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_av1_tile_group_entry`, containing AV1 Tile Group
+	OBU decoding parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_AV1_FRAME``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_av1_frame`, containing AV1 Frame/Frame
+	Header OBU decoding parameters for stateless video decoders.
+    * - ``V4L2_CTRL_TYPE_AV1_FILM_GRAIN``
+      - n/a
+      - n/a
+      - n/a
+      - A struct :c:type:`v4l2_ctrl_av1_film_grain`, containing AV1 Film Grain
+        parameters for stateless video decoders.
 
 .. raw:: latex
 
@@ -595,6 +649,14 @@ See also the examples in :ref:`control`.
 	``V4L2_CTRL_FLAG_GRABBED`` flag when buffers are allocated or
 	streaming is in progress since most drivers do not support changing
 	the format in that case.
+    * - ``V4L2_CTRL_FLAG_DYNAMIC_ARRAY``
+      - 0x0800
+      - This control is a dynamically sized 1-dimensional array. It
+        behaves the same as a regular array, except that the number
+	of elements as reported by the ``elems`` field is between 1 and
+	``dims[0]``. So setting the control with a differently sized
+	array will change the ``elems`` field when the control is
+	queried afterwards.
 
 Return Value
 ============

@@ -7,11 +7,8 @@ if HARDKERNEL
 
 config ODROID_EXYNOS5_SP
 	tristate "Enable the INA231 Sensor on ODROID-EXYNOS5"
-#	depends on MACH_ODROIDXU3
 	default n
-	---help---
+	help
 		Enables the INA231 Sensor on ODROID-EXYNOS5
 
 endif
-
-

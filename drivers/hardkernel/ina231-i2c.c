@@ -25,8 +25,8 @@
 //[*]--------------------------------------------------------------------------------------------------[*]
 static 	void __exit		ina231_i2c_exit		(void);
 static 	int __init 		ina231_i2c_init		(void);
-static 	int  	        ina231_i2c_remove	(struct i2c_client *client);
-static 	int  	        ina231_i2c_probe	(struct i2c_client *client, const struct i2c_device_id *id);
+static 	void  	        ina231_i2c_remove	(struct i2c_client *client);
+static 	int  	        ina231_i2c_probe	(struct i2c_client *client);
         int 	        ina231_i2c_read     (struct i2c_client *client, unsigned char cmd);
         int 	        ina231_i2c_write    (struct i2c_client *client, unsigned char cmd, unsigned short data);
         void            ina231_i2c_enable   (struct ina231_sensor *sensor);
@@ -135,7 +135,7 @@ static 	void 	ina231_work		(struct work_struct *work)
         sensor->cur_uW = (sensor->cur_uV / 1000 ) * (sensor->cur_uA / 1000);
 	sensor->cur_uJ += (sensor->cur_uW / 1000 ) * (sensor->pd->update_period / 1000);
         
-        if((sensor->cur_uV > sensor->max_uV) || (sensor->cur_uA > sensor->cur_uA))  {
+        if((sensor->cur_uV > sensor->max_uV) || (sensor->cur_uA > sensor->max_uA))  {
             sensor->max_uV = sensor->cur_uV;    sensor->max_uA = sensor->cur_uA;    sensor->max_uW = sensor->cur_uW;
         }
     	mutex_unlock(&sensor->mutex);
@@ -205,7 +205,7 @@ static int  ina231_i2c_dt_parse(struct i2c_client *client, struct ina231_sensor 
 #endif
 
 //[*]--------------------------------------------------------------------------------------------------[*]
-static int 	ina231_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int 	ina231_i2c_probe(struct i2c_client *client)
 {
     int     rc = 0;
     struct  ina231_sensor   *sensor;
@@ -281,7 +281,7 @@ out:
 }
 
 //[*]--------------------------------------------------------------------------------------------------[*]
-static int 	ina231_i2c_remove(struct i2c_client *client)
+static void 	ina231_i2c_remove(struct i2c_client *client)
 {
     struct  ina231_sensor   *sensor = dev_get_drvdata(&client->dev);
 
@@ -291,8 +291,6 @@ static int 	ina231_i2c_remove(struct i2c_client *client)
 	ina231_misc_remove	(&client->dev);
     // timer
     if(sensor->pd->enable)  hrtimer_cancel(&sensor->timer);
-
-    return  0;
 }
 
 //[*]--------------------------------------------------------------------------------------------------[*]

@@ -665,6 +665,15 @@ static int proc_pid_syscall(struct seq_file *m, struct pid_namespace *ns,
 }
 #endif /* CONFIG_HAVE_ARCH_TRACEHOOK */
 
+#ifdef CONFIG_IPC_CLASSES
+static int proc_ipcc_info(struct seq_file *m, struct pid_namespace *ns,
+                struct pid *pid, struct task_struct *task)
+{
+    seq_printf(m, "%d %d\n", task->ipcc, task->ipcc_cntr);
+    return 0;
+}
+#endif /* CONFIG_IPC_CLASSES */
+
 /************************************************************************/
 /*                       Here the fs part begins                        */
 /************************************************************************/
@@ -3612,6 +3621,7 @@ static const struct pid_entry tid_base_stuff[] = {
 #endif
 	REG("cmdline",   S_IRUGO, proc_pid_cmdline_ops),
 	ONE("stat",      S_IRUGO, proc_tid_stat),
+    ONE("ipcc",      S_IRUGO, proc_ipcc_info),
 	ONE("statm",     S_IRUGO, proc_pid_statm),
 	REG("maps",      S_IRUGO, proc_pid_maps_operations),
 #ifdef CONFIG_PROC_CHILDREN
